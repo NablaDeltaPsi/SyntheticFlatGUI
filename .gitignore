@@ -1,0 +1,12 @@
+alt/
+testfiles/
+test*
+*.arw
+*.csv
+*.txt
+*.tif
+*.tiff
+*.lnk
+.idea/
+pyinstaller*
+*.conf
