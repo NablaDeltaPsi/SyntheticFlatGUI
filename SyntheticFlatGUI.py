@@ -14,6 +14,18 @@ from scipy.signal import savgol_filter
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.0'
 
+# todo: remote and readme
+# todo: check best zipping or none
+# todo: sigma clip: remove nans
+# todo: include neighbor statistics
+# todo: solve main option dependencies
+# todo: option for reduce_size_factor
+# todo: running if no file chosen
+
+# zipping options:
+# without 190 MB, very fast
+# gzip     30 MB, very slow
+
 # STATIC SETTINGS =============================================================
 REDUCE_SIZE_FACTOR = 4    # reduce size for faster calculations and fits
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -80,35 +92,32 @@ def corr_gradient(image, file):
     image_write = np.float32(image_write / np.max(image_write))
     cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + ".tif", image_write)
 
-    # calculate
+    # measure slopes
     height, width, colors = image.shape
-    mpos_x = [int(width / 4), int(width * 3 / 4)]
-    mpos_y = [int(height / 4), int(height * 3 / 4)]
-    mpos_d = CORR_GRADIENT_MEAS_SIZE
+    slopes_x = []
+    slopes_y = []
     for c in range(colors):
-        mint_0 = np.median(image[mpos_y[0] - mpos_d:mpos_y[0] + mpos_d, mpos_x[0] - mpos_d:mpos_x[0] + mpos_d, c])
-        mint_x = np.median(image[mpos_y[0] - mpos_d:mpos_y[0] + mpos_d, mpos_x[1] - mpos_d:mpos_x[1] + mpos_d, c])
-        mint_y = np.median(image[mpos_y[1] - mpos_d:mpos_y[1] + mpos_d, mpos_x[0] - mpos_d:mpos_x[0] + mpos_d, c])
-        mint_1 = np.median(image[mpos_y[1] - mpos_d:mpos_y[1] + mpos_d, mpos_x[1] - mpos_d:mpos_x[1] + mpos_d, c])
-        # print("quadrants: ", calc_quadrant_med(image, color_index=c, relative=True))
-        # print("ints: ", int(mint_0), int(mint_x), int(mint_y), int(mint_1))
-        slope_x = (
-                mint_x + mint_1 - mint_0 - mint_y)  # aus irgendeinem Grund besser nicht *2 (slope Nenner sollte 0.5 sein)
-        slope_y = (mint_y + mint_1 - mint_0 - mint_x)
-        # print("slopes: ", int(slope_x), int(slope_y), int(slope_x + slope_y))
+        rowmeans = []
+        for row in range(height):
+            rowmeans.append(np.mean(sigmaclip(image[row,:,c], low=2, high=2)[0]))
+        slope_y = np.mean(np.diff(rowmeans)) * height
+        slopes_y.append(slope_y)
+
+        colmeans = []
+        for col in range(width):
+            colmeans.append(np.mean(sigmaclip(image[:,col,c], low=2, high=2)[0]))
+        slope_x = np.mean(np.diff(colmeans)) * width
+        slopes_x.append(slope_x)
+
         x = np.linspace(0, 1, width)
         y = np.linspace(0, 1, height)
         X, Y = np.meshgrid(x, y)
         gradient = X * slope_x + Y * slope_y - (slope_x + slope_y) / 2
         image[:, :, c] = image[:, :, c] - gradient
-        # print("quadrants: ", calc_quadrant_med(image, color_index=c, relative=True))
-        # print("")
 
-        # check integration areas
-        # image[mpos_y[0]-mpos_d:mpos_y[0]+mpos_d, mpos_x[0]-mpos_d:mpos_x[0]+mpos_d, c].fill(0)
-        # image[mpos_y[0]-mpos_d:mpos_y[0]+mpos_d, mpos_x[1]-mpos_d:mpos_x[1]+mpos_d, c].fill(0)
-        # image[mpos_y[1]-mpos_d:mpos_y[1]+mpos_d, mpos_x[0]-mpos_d:mpos_x[0]+mpos_d, c].fill(0)
-        # image[mpos_y[1]-mpos_d:mpos_y[1]+mpos_d, mpos_x[1]-mpos_d:mpos_x[1]+mpos_d, c].fill(0)
+    # print
+    print("gradient slopes x: ", slopes_x)
+    print("gradient slopes y: ", slopes_y)
 
     # save corrected image
     image_write = bayer(image[:, :, 1:])
