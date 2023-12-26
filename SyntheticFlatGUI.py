@@ -19,7 +19,6 @@ VERSION = '1.0'
 # todo: sigma clip: remove nans
 # todo: include neighbor statistics
 # todo: solve main option dependencies
-# todo: option for reduce_size_factor
 # todo: running if no file chosen
 
 # zipping options:
@@ -27,11 +26,9 @@ VERSION = '1.0'
 # gzip     30 MB, very slow
 
 # STATIC SETTINGS =============================================================
-REDUCE_SIZE_FACTOR = 4    # reduce size for faster calculations and fits
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
-CORR_GRADIENT_MEAS_SIZE = 50  # size of squares at quarter-positions for brightness measurements
 ADD_NOISE_LEVEL = 0
 
 
@@ -66,14 +63,14 @@ def write_pickle(im_raw, file):
         pickle.dump(im_raw, open(pickle_filename, 'wb'))
         print("maxrad original: ", int(dist_from_center(0, 0, im_raw)))
 
-def edit_image(im_raw, bias_value=0):
+def edit_image(im_raw, bias_value=0, shrink_factor='4'):
     if bias_value > 0:
         print("subtract bias (" + str(bias_value) + ") ...")
         im_raw = im_raw - bias_value
 
-    if REDUCE_SIZE_FACTOR:
+    if shrink_factor.isnumeric():
         print("resize ...")
-        im_raw = resize(im_raw, REDUCE_SIZE_FACTOR)
+        im_raw = resize(im_raw, int(shrink_factor))
         print("shape: ", im_raw.shape)
 
     if IGNORE_EDGE:
@@ -611,6 +608,14 @@ class NewGUI():
             statistics.add_radiobutton(label=opt, value=opt, variable=self.radio_statistics)
         menubar.add_cascade(label="Statistics", menu=statistics)
 
+        # shrink
+        shrink = tk.Menu(menubar, tearoff=0)
+        self.radio_shrink = tk.StringVar(self.root)
+        self.shrink_factor = ['off', '2', '4', '8', '16']
+        for opt in self.shrink_factor:
+            shrink.add_radiobutton(label=opt, value=opt, variable=self.radio_shrink)
+        menubar.add_cascade(label="Shrink", menu=shrink)
+
         # buttons
         self.button_load = tk.Button(text="Load files", command=self.load_files)
         self.button_load.grid(row=0, column=0, sticky='NWSE', padx=padding, pady=padding)
@@ -653,6 +658,7 @@ class NewGUI():
         config_object["BASICS"]["window size"] = self.root.winfo_geometry()
         config_object["BASICS"]["lastpath"] = self.lastpath
         config_object["BASICS"]["radio_statistics"] = self.radio_statistics.get()
+        config_object["BASICS"]["radio_shrink"] = self.radio_shrink.get()
         config_object["BASICS"]["bias_value"] = str(self.bias_value)
 
         config_object["OPTIONS"] = {}
@@ -685,6 +691,7 @@ class NewGUI():
             config_object["BASICS"]["window size"] = '318x128+313+94'
             config_object["BASICS"]["lastpath"]    = './'
             config_object["BASICS"]["radio_statistics"]  = 'sigma clip 2.0'
+            config_object["BASICS"]["radio_shrink"]  = '4'
             config_object["BASICS"]["bias_value"]  = '0'
 
             config_object["OPTIONS"] = {}
@@ -703,6 +710,7 @@ class NewGUI():
         self.root.geometry(config_object["BASICS"]["window size"])
         self.lastpath = config_object["BASICS"]["lastpath"]
         self.radio_statistics.set(config_object["BASICS"]["radio_statistics"])
+        self.radio_shrink.set(config_object["BASICS"]["radio_shrink"])
         self.bias_value = int(config_object["BASICS"]["bias_value"])
 
         self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"] == 'True')
@@ -773,7 +781,10 @@ class NewGUI():
 
                 # edit
                 self.update_labels(status="edit image...")
-                image_edit = edit_image(image, bias_value=self.bias_value)
+                image_edit = edit_image(image,
+                                        bias_value=self.bias_value,
+                                        shrink_factor=self.radio_shrink.get()
+                                        )
 
                 # gradient
                 if self.opt_gradient.get():
