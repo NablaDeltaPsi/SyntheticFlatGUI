@@ -5,8 +5,11 @@ from tkinter.filedialog import askopenfilename
 import glob, os, sys, copy
 import numpy as np
 from configparser import ConfigParser
-import rawpy, cv2, scipy
-import pickle, gzip
+import rawpy, cv2
+import pickle#, gzip, lzma, bz2 # gzip.open, lzma.open, bz2.BZ2File
+from scipy.stats import sigmaclip
+from scipy.interpolate import interp1d
+from scipy.signal import savgol_filter
 
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.0'
@@ -19,6 +22,7 @@ RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
 CORR_GRADIENT_MEAS_SIZE = 50  # size of squares at quarter-positions for brightness measurements
 ADD_NOISE_LEVEL = 0
 
+
 # STATIC MAJOR FUNCTIONS =====================================================
 def load_image(file):
     print("")
@@ -27,7 +31,7 @@ def load_image(file):
         print("File does not exist!\n\n")
         sys.exit()
     try:
-        im_raw = pickle.load(gzip.open(
+        im_raw = pickle.load(open(
             os.path.dirname(file) + os.sep + "Pickle_files" + os.sep + os.path.basename(file).split('.')[
                 0] + ".pkl", 'rb'))
         print("Use image from pickle file.")
@@ -47,7 +51,7 @@ def write_pickle(im_raw, file):
     pickle_filename = savepath + os.sep + os.path.basename(file).split('.')[0] + ".pkl"
     if not os.path.isfile(pickle_filename):
         print("write pickle file ...")
-        pickle.dump(im_raw, gzip.open(pickle_filename, 'wb'))
+        pickle.dump(im_raw, open(pickle_filename, 'wb'))
         print("maxrad original: ", int(dist_from_center(0, 0, im_raw)))
 
 def edit_image(im_raw, bias_value=0):
@@ -146,7 +150,7 @@ def calc_histograms(image, file, circular=False):
                fmt=fmt)
 
 
-def calc_rad_profile(image, file, sigma_clip=2, extrapolate_max=True):
+def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
     print("calculate radial profiles ...")
     image_width = image.shape[1]
     image_height = image.shape[0]
@@ -172,9 +176,9 @@ def calc_rad_profile(image, file, sigma_clip=2, extrapolate_max=True):
     index = 0
     for rad in sorted(radii):
         rad_profile[index, 0] = rad / maxrad
-        rad_profile[index, 1] = safe_sigmaclip_mean(rad_counts[rad][0], sigma_clip)
-        rad_profile[index, 2] = safe_sigmaclip_mean(rad_counts[rad][1], sigma_clip)
-        rad_profile[index, 3] = safe_sigmaclip_mean(rad_counts[rad][2], sigma_clip)
+        rad_profile[index, 1] = apply_statistics(rad_counts[rad][0], statistics)
+        rad_profile[index, 2] = apply_statistics(rad_counts[rad][1], statistics)
+        rad_profile[index, 3] = apply_statistics(rad_counts[rad][2], statistics)
         rad_profile_raw_mean[index, 0] = rad / maxrad
         rad_profile_raw_mean[index, 1] = np.mean(rad_counts[rad][0])
         rad_profile_raw_mean[index, 2] = np.mean(rad_counts[rad][1])
@@ -204,9 +208,9 @@ def calc_rad_profile(image, file, sigma_clip=2, extrapolate_max=True):
         slopes = []
         for c in range(3):
             this_filtered = rad_profile_cut[:, c + 1]
-            this_filtered = scipy.signal.savgol_filter(this_filtered, window_length=int(rad_profile_cut.shape[0] / 10),
+            this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 10),
                                                        polyorder=2, mode='interp')
-            this_filtered = scipy.signal.savgol_filter(this_filtered, window_length=int(rad_profile_cut.shape[0] / 5),
+            this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 5),
                                                        polyorder=2, mode='interp')
             mi = np.argmax(this_filtered)
             maxind.append(mi)
@@ -220,9 +224,9 @@ def calc_rad_profile(image, file, sigma_clip=2, extrapolate_max=True):
     radii = np.linspace(0, 1, RADIAL_RESOLUTION)
     rad_profile_smoothed = radii
     for c in range(3):
-        y_new = scipy.signal.savgol_filter(rad_profile_cut[:, c + 1], window_length=int(rad_profile_cut.shape[0] / 10),
+        y_new = savgol_filter(rad_profile_cut[:, c + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10),
                                            polyorder=2, mode='interp')
-        y_new = scipy.signal.savgol_filter(y_new, window_length=int(rad_profile_cut.shape[0] / 5), polyorder=2,
+        y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2,
                                            mode='interp')
 
         if extrapolate_max:
@@ -244,9 +248,9 @@ def calc_rad_profile(image, file, sigma_clip=2, extrapolate_max=True):
         else:
             x_new = rad_profile_cut[:, 0]
 
-        # y_new = scipy.signal.savgol_filter(y_new, window_length=int(rad_profile_cut.shape[0]/5), polyorder=2, mode='interp')
+        # y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0]/5), polyorder=2, mode='interp')
 
-        f = scipy.interpolate.interp1d(x_new, y_new, kind='quadratic', fill_value='extrapolate')
+        f = interp1d(x_new, y_new, kind='quadratic', fill_value='extrapolate')
         y_new = f(radii)
         rad_profile_smoothed = np.column_stack((rad_profile_smoothed, y_new))
 
@@ -498,6 +502,11 @@ def clip(number):
     else:
         return number
 
+def odd_int(number):
+    if int(number) % 2 == 1:
+        return int(number)
+    else:
+        return int(number) + 1
 
 def get_closest(val, list):
     # list must be sorted!
@@ -514,13 +523,25 @@ def get_closest(val, list):
             break
     return closest_ind
 
-def safe_sigmaclip_mean(array, sigma_clip):
-    reduced = scipy.stats.sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
-    meanval = np.mean(reduced)
-    if np.isnan(meanval):
-        meanval = np.median(array)
-        print("check")
-    return meanval
+def apply_statistics(array, statistics):
+    if statistics[:10] == 'sigma clip':
+        number = statistics[10:].strip()
+        sigma_clip = float(number)
+        reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
+        result = np.mean(reduced)
+    elif statistics == 'median':
+        result = np.median(array)
+    elif statistics == 'min':
+        result = np.min(array)
+    elif statistics == 'max':
+        result = np.max(array)
+    else:
+        result = np.mean(array)
+
+    # safety for empty sigma clipping
+    if np.isnan(result):
+        result = np.median(array)
+    return result
 
 class NewGUI():
     def __init__(self):
@@ -531,6 +552,7 @@ class NewGUI():
         self.current_file = "0 files"
         self.current_status = "ready"
         self.bias_value = 0
+        self.running = False
         
         padding = 5
 
@@ -571,13 +593,14 @@ class NewGUI():
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         menubar.add_cascade(label="Settings", menu=settings)
 
-        # sigma clipping
-        mode = tk.Menu(menubar, tearoff=0)
-        self.radio_clip = tk.StringVar(self.root)
-        self.sigmas = ["0.5", "1.0", "2.0", "3.0", "4.0", "8.0", "off"]
+        # statistics
+        statistics = tk.Menu(menubar, tearoff=0)
+        self.radio_statistics = tk.StringVar(self.root)
+        self.sigmas = ["mean", "median", "min", "max", "sigma clip 0.5", "sigma clip 1.0",
+                       "sigma clip 2.0", "sigma clip 3.0", "sigma clip 4.0", "sigma clip 8.0"]
         for opt in self.sigmas:
-            mode.add_radiobutton(label=opt, value=opt, variable=self.radio_clip)
-        menubar.add_cascade(label="Sigma clipping", menu=mode)
+            statistics.add_radiobutton(label=opt, value=opt, variable=self.radio_statistics)
+        menubar.add_cascade(label="Statistics", menu=statistics)
 
         # buttons
         self.button_load = tk.Button(text="Load files", command=self.load_files)
@@ -620,7 +643,7 @@ class NewGUI():
         config_object["BASICS"] = {}
         config_object["BASICS"]["window size"] = self.root.winfo_geometry()
         config_object["BASICS"]["lastpath"] = self.lastpath
-        config_object["BASICS"]["radio_clip"] = self.radio_clip.get()
+        config_object["BASICS"]["radio_statistics"] = self.radio_statistics.get()
         config_object["BASICS"]["bias_value"] = str(self.bias_value)
 
         config_object["OPTIONS"] = {}
@@ -650,9 +673,9 @@ class NewGUI():
         # default
         else:
             config_object["BASICS"] = {}
-            config_object["BASICS"]["window size"] = '379x213+421+21'
+            config_object["BASICS"]["window size"] = '318x128+313+94'
             config_object["BASICS"]["lastpath"]    = './'
-            config_object["BASICS"]["radio_clip"]  = '2.0'
+            config_object["BASICS"]["radio_statistics"]  = 'sigma clip 2.0'
             config_object["BASICS"]["bias_value"]  = '0'
 
             config_object["OPTIONS"] = {}
@@ -670,7 +693,7 @@ class NewGUI():
         # apply
         self.root.geometry(config_object["BASICS"]["window size"])
         self.lastpath = config_object["BASICS"]["lastpath"]
-        self.radio_clip.set(config_object["BASICS"]["radio_clip"])
+        self.radio_statistics.set(config_object["BASICS"]["radio_statistics"])
         self.bias_value = int(config_object["BASICS"]["bias_value"])
 
         self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"] == 'True')
@@ -686,6 +709,8 @@ class NewGUI():
         self.update_labels()
 
     def load_files(self):
+        if self.running:
+            return
         user_input = askopenfilename(initialdir=self.lastpath, multiple=True,
               filetypes=[('all', '.*'), ('.arw', '.arw')])
         if user_input:
@@ -695,6 +720,8 @@ class NewGUI():
         return
 
     def ask_bias(self):
+        if self.running:
+            return
         user_input = tk.simpledialog.askinteger(title="Bias value", prompt="Which bias value should be subtracted from the image?")
         if user_input:
             self.bias_value = int(user_input)
@@ -712,44 +739,69 @@ class NewGUI():
         self.root.update()
 
     def process(self):
-        self.update_labels(status="running...")
-        for file in self.loaded_files:
+        if self.running:
+            # print("exit")
+            # self.root.quit()
+            # self.running = False
+            # self.root.mainloop()
+            # self.update_labels(status="ready")
+            return
+        else:
+            self.running = True
+            self.update_labels(status="running...")
+        try:
+            for file in self.loaded_files:
 
-            # set and display
-            self.update_labels(file=file)
+                # set and display
+                self.update_labels(file=file)
 
-            # process
-            self.update_labels(status="load and debayer...")
-            image = load_image(file)
-            if self.set_write_pickle.get():
-                self.update_labels(status="save pickle file...\n(takes some time but faster next time)")
-                write_pickle(image, self.current_file)
-            self.update_labels(status="edit image...")
-            image_edit = edit_image(image, bias_value=self.bias_value)
-            if self.opt_gradient.get():
-                self.update_labels(status="correct gradient...")
-                image_edit = corr_gradient(image_edit, self.current_file)
-            if self.opt_histogram.get():
-                self.update_labels(status="calculate histogram...")
-                calc_histograms(image_edit, self.current_file, self.set_circular_hist.get())
-            if self.opt_radprof.get():
-                self.update_labels(status="calculate radial profile...")
-                try:
-                    sigma_clip = float(self.radio_clip.get())
-                except:
-                    sigma_clip = np.inf
-                rad_profile_smoothed = calc_rad_profile(image_edit, self.current_file,
-                                                        sigma_clip=sigma_clip,
-                                                        extrapolate_max=self.set_extrapolate_max.get())
-            if self.opt_synthflat.get():
-                self.update_labels(status="export synthetic flat...")
-                export_tif(rad_profile_smoothed, self.current_file, grey_flat=self.set_grey_flat.get(), tif_size=(image.shape[0], image.shape[1]))
+                # load
+                self.update_labels(status="load and debayer...")
+                image = load_image(file)
+                if self.set_write_pickle.get():
+                    self.update_labels(status="save pickle file...\n(takes some time but faster next time)")
+                    write_pickle(image, self.current_file)
 
-            print("Finished file.")
+                # edit
+                self.update_labels(status="edit image...")
+                image_edit = edit_image(image, bias_value=self.bias_value)
 
-        print("\nFinished.")
-        self.update_labels(file=str(len(self.loaded_files)) + " files")
-        self.update_labels(status="finished.")
+                # gradient
+                if self.opt_gradient.get():
+                    self.update_labels(status="correct gradient...")
+                    image_edit = corr_gradient(image_edit, self.current_file)
+
+                # histogram
+                if self.opt_histogram.get():
+                    self.update_labels(status="calculate histogram...")
+                    calc_histograms(image_edit, self.current_file, self.set_circular_hist.get())
+
+                # radial profile
+                if self.opt_radprof.get():
+                    self.update_labels(status="calculate radial profile...")
+                    rad_profile_smoothed = calc_rad_profile(image_edit, self.current_file,
+                                                            statistics=self.radio_statistics.get(),
+                                                            extrapolate_max=self.set_extrapolate_max.get())
+
+                # synthetic flat
+                if self.opt_synthflat.get():
+                    self.update_labels(status="export synthetic flat...")
+                    export_tif(rad_profile_smoothed, self.current_file, grey_flat=self.set_grey_flat.get(), tif_size=(image.shape[0], image.shape[1]))
+
+                self.update_labels(status="finished.")
+                print("Finished file.")
+
+
+        except Exception as e:
+            print("\nERROR!!\n\n")
+            self.update_labels(status="unknown error...")
+            print(e)
+            return
+
+        finally:
+            self.running = False
+            self.update_labels(file=str(len(self.loaded_files)) + " files")
+
         return
 
 
