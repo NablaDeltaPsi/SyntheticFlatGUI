@@ -2,28 +2,21 @@ import tkinter as tk
 import tkinter.font
 import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
-import glob, os, sys, copy
-import numpy as np
+import glob, os, sys, copy, numpy as np#, datetime as dt
 from configparser import ConfigParser
 import rawpy, cv2
-import pickle#, gzip, lzma, bz2 # gzip.open, lzma.open, bz2.BZ2File
+import pickle, bz2
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.0'
 
 # todo: remote and readme
-# todo: check best zipping or none
-# todo: sigma clip: remove nans
 # todo: include neighbor statistics
-# todo: solve main option dependencies
-# todo: running if no file chosen
-
-# zipping options:
-# without 190 MB, very fast
-# gzip     30 MB, very slow
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -40,28 +33,35 @@ def load_image(file):
         print("File does not exist!\n\n")
         sys.exit()
     try:
-        im_raw = pickle.load(open(
-            os.path.dirname(file) + os.sep + "Pickle_files" + os.sep + os.path.basename(file).split('.')[
-                0] + ".pkl", 'rb'))
+        im_deb = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
+                                         os.path.basename(file).split('.')[0] + ".pkl", 'rb'))
+        rawshape = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
+                                         os.path.basename(file).split('.')[0] + "_rawshape.pkl", 'rb'))
         print("Use image from pickle file.")
-        print("shape: ", im_raw.shape)
+        print("shape: ", im_deb.shape)
     except:
         print("read file ...")
-        im_raw = rawpy.imread(file).raw_image
+        im_raw = rawpy.imread(file).raw_image_visible
+        rawshape = im_raw.shape
         print("shape: ", im_raw.shape)
         print("debayer ...")
-        im_raw = debayer(im_raw)
-        print("shape: ", im_raw.shape)
+        im_deb = debayer(im_raw)
+        print("shape: ", im_deb.shape)
+    return im_deb, rawshape
 
-    return im_raw
-
-def write_pickle(im_raw, file):
+def write_pickle(im_deb, rawshape, file):
+    # without 190 MB, 0 min
+    # gzip     30 MB, 3 min
+    # lzma     20 MB, 3 min
+    # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
     savepath = create_folder(file, "Pickle_files")
     pickle_filename = savepath + os.sep + os.path.basename(file).split('.')[0] + ".pkl"
-    if not os.path.isfile(pickle_filename):
+    pickle_filename_rawshape = savepath + os.sep + os.path.basename(file).split('.')[0] + "_rawshape.pkl"
+    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_rawshape):
         print("write pickle file ...")
-        pickle.dump(im_raw, open(pickle_filename, 'wb'))
-        print("maxrad original: ", int(dist_from_center(0, 0, im_raw)))
+        pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
+        pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
+        print("maxrad original: ", int(dist_from_center(0, 0, im_deb)))
 
 def edit_image(im_raw, bias_value=0, shrink_factor='4'):
     if bias_value > 0:
@@ -154,6 +154,44 @@ def calc_histograms(image, file, circular=False):
     np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_histograms.csv", data,
                delimiter=",",
                fmt=fmt)
+
+def nearest_neighbor_pixelmap(rawimage, file, color=0):
+    rawimage = rawimage[:500, :500, 0]
+
+    rows = rawimage.shape[0]
+    cols = rawimage.shape[1]
+    maxneighbors = np.zeros((rows, cols))
+    for n in range(rows):
+        if n % 500 == 0: print("Row " + str(n))
+        for m in range(cols):
+            neighbors = []
+            for nd in [-1, 0, 1]:
+                for md in [-1, 0, 1]:
+                    if not (nd == 0 and md == 0):
+                        try:
+                            neighbors.append(rawimage[n + nd, m + md])
+                        except:
+                            pass
+            maxneighbors[n, m] = max(neighbors)
+    maxneighbors_ = maxneighbors.flatten()
+
+    fig = plt.figure(figsize=(7, 5))
+    plt.rcParams['font.size'] = 14
+    plt.hist2d(maxneighbors_, rawimage.flatten(), bins=300, range=[[0, 2000], [0, 2000]], norm=mpl.colors.LogNorm(), cmap=plt.cm.jet)
+    # plt.xticks(range(100,20000,200))
+    # plt.yticks(range(100,20000,200))
+    plt.xticks([])
+    plt.yticks([])
+    plt.xlim([200, 1500])
+    plt.ylim([200, 1500])
+    plt.xlabel('Max of 8 neighbors')
+    plt.ylabel('Pixel value')
+    plt.colorbar()
+    plt.gca().set_aspect('equal')
+    fig.tight_layout()
+    savepath = create_folder(file, "Nearest_neighbor_pixelmap")
+    plt.savefig(savepath + os.sep + os.path.basename(file).split(".")[0] + '_pixelmap.png', dpi=300)
+    plt.show()
 
 
 def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
@@ -543,10 +581,6 @@ def apply_statistics(array, statistics):
         result = np.max(array)
     else:
         result = np.mean(array)
-
-    # safety for empty sigma clipping
-    if np.isnan(result):
-        result = np.median(array)
     return result
 
 class NewGUI():
@@ -578,24 +612,28 @@ class NewGUI():
         # mainoptions
         options = tk.Menu(menubar, tearoff=0)
         self.opt_gradient  = tk.BooleanVar()
+        self.opt_pixelmap  = tk.BooleanVar()
         self.opt_histogram = tk.BooleanVar()
         self.opt_radprof   = tk.BooleanVar()
         self.opt_synthflat = tk.BooleanVar()
         options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient)
+        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap)
         options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram)
         options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof)
-        options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat)
+        options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat, command=self.verify_modes)
         menubar.add_cascade(label="Options", menu=options)
 
         # settings
         settings = tk.Menu(menubar, tearoff=0)
-        self.set_write_pickle  = tk.BooleanVar()
-        self.set_circular_hist = tk.BooleanVar()
-        self.set_grey_flat   = tk.BooleanVar()
+        self.set_write_pickle    = tk.BooleanVar()
+        self.set_circular_hist   = tk.BooleanVar()
+        self.set_grey_flat       = tk.BooleanVar()
+        self.set_debayered_flat  = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
+        settings.add_checkbutton(label="Export synthetic flat debayered", onvalue=1, offvalue=0, variable=self.set_debayered_flat)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         menubar.add_cascade(label="Settings", menu=settings)
 
@@ -630,7 +668,7 @@ class NewGUI():
         self.label_files = tk.Label(textvariable=self.label_files_var, justify='left')
         self.label_files.grid(row=0, column=1, sticky='NWSE', padx=padding, pady=padding)
         self.label_bias_var = tk.StringVar()
-        self.label_bias_var.set("bias = 0")
+        self.label_bias_var.set(0)
         self.label_bias = tk.Label(textvariable=self.label_bias_var, justify='left')
         self.label_bias.grid(row=1, column=1, sticky='NWSE', padx=padding, pady=padding)
         self.label_status_var = tk.StringVar()
@@ -655,28 +693,34 @@ class NewGUI():
         config_object = ConfigParser()
 
         config_object["BASICS"] = {}
-        config_object["BASICS"]["window size"] = self.root.winfo_geometry()
-        config_object["BASICS"]["lastpath"] = self.lastpath
+        config_object["BASICS"]["window size"]      = self.root.winfo_geometry()
+        config_object["BASICS"]["lastpath"]         = self.lastpath
         config_object["BASICS"]["radio_statistics"] = self.radio_statistics.get()
-        config_object["BASICS"]["radio_shrink"] = self.radio_shrink.get()
-        config_object["BASICS"]["bias_value"] = str(self.bias_value)
+        config_object["BASICS"]["radio_shrink"]     = self.radio_shrink.get()
+        config_object["BASICS"]["bias_value"]   = str(self.bias_value)
 
         config_object["OPTIONS"] = {}
         config_object["OPTIONS"]["opt_gradient"]  = str(self.opt_gradient.get())
+        config_object["OPTIONS"]["opt_pixelmap"]  = str(self.opt_pixelmap.get())
         config_object["OPTIONS"]["opt_histogram"] = str(self.opt_histogram.get())
         config_object["OPTIONS"]["opt_radprof"]   = str(self.opt_radprof.get())
         config_object["OPTIONS"]["opt_synthflat"] = str(self.opt_synthflat.get())
 
         config_object["SETTINGS"] = {}
-        config_object["SETTINGS"]["set_write_pickle"]    = str(self.set_write_pickle.get())
-        config_object["SETTINGS"]["set_circular_hist"]   = str(self.set_circular_hist.get())
+        config_object["SETTINGS"]["set_write_pickle"]     = str(self.set_write_pickle.get())
+        config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
-        config_object["SETTINGS"]["set_extrapolate_max"] = str(self.set_extrapolate_max.get())
+        config_object["SETTINGS"]["set_debayered_flat"]   = str(self.set_debayered_flat.get())
+        config_object["SETTINGS"]["set_extrapolate_max"]  = str(self.set_extrapolate_max.get())
 
         with open(GUINAME + ".conf", 'w') as conf:
             config_object.write(conf)
 
         self.root.destroy()
+
+    def verify_modes(self):
+        if self.opt_synthflat.get():
+            self.opt_radprof.set(1)
 
     def load_config_file(self):
         config_object = ConfigParser()
@@ -696,14 +740,16 @@ class NewGUI():
 
             config_object["OPTIONS"] = {}
             config_object["OPTIONS"]["opt_gradient"]  = 'True'
-            config_object["OPTIONS"]["opt_histogram"] = 'True'
+            config_object["OPTIONS"]["opt_pixelmap"]  = 'False'
+            config_object["OPTIONS"]["opt_histogram"] = 'False'
             config_object["OPTIONS"]["opt_radprof"]   = 'True'
             config_object["OPTIONS"]["opt_synthflat"] = 'True'
 
             config_object["SETTINGS"] = {}
-            config_object["SETTINGS"]["set_write_pickle"]  = 'True'
-            config_object["SETTINGS"]["set_circular_hist"] = 'True'
-            config_object["SETTINGS"]["set_grey_flat"]     = 'False'
+            config_object["SETTINGS"]["set_write_pickle"]    = 'True'
+            config_object["SETTINGS"]["set_circular_hist"]   = 'True'
+            config_object["SETTINGS"]["set_grey_flat"]       = 'False'
+            config_object["SETTINGS"]["set_debayered_flat"]  = 'False'
             config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
 
         # apply
@@ -713,14 +759,16 @@ class NewGUI():
         self.radio_shrink.set(config_object["BASICS"]["radio_shrink"])
         self.bias_value = int(config_object["BASICS"]["bias_value"])
 
-        self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"] == 'True')
+        self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"]   == 'True')
+        self.opt_pixelmap.set(config_object["OPTIONS"]["opt_pixelmap"]   == 'True')
         self.opt_histogram.set(config_object["OPTIONS"]["opt_histogram"] == 'True')
-        self.opt_radprof.set(config_object["OPTIONS"]["opt_radprof"] == 'True')
+        self.opt_radprof.set(config_object["OPTIONS"]["opt_radprof"]     == 'True')
         self.opt_synthflat.set(config_object["OPTIONS"]["opt_synthflat"] == 'True')
 
-        self.set_write_pickle.set(config_object["SETTINGS"]["set_write_pickle"] == 'True')
+        self.set_write_pickle.set(config_object["SETTINGS"]["set_write_pickle"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
-        self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"] == 'True')
+        self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
+        self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered_flat"]        == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
 
         self.update_labels()
@@ -733,6 +781,7 @@ class NewGUI():
         if user_input:
             self.loaded_files = user_input
             self.update_labels(file=str(len(self.loaded_files)) + " files")
+            self.update_labels(status="ready")
             self.lastpath = os.path.dirname(self.loaded_files[0])
         return
 
@@ -742,7 +791,7 @@ class NewGUI():
         user_input = tk.simpledialog.askinteger(title="Bias value", prompt="Which bias value should be subtracted from the image?")
         if user_input:
             self.bias_value = int(user_input)
-        self.label_bias_var.set("bias = " + str(self.bias_value))
+        self.label_bias_var.set(self.bias_value)
         self.root.update()
 
     def update_labels(self, file="", status=""):
@@ -767,17 +816,24 @@ class NewGUI():
             self.running = True
             self.update_labels(status="running...")
         try:
+            if not self.loaded_files:
+                self.running = False
+                self.update_labels(status="no file chosen.")
+                return
             for file in self.loaded_files:
 
                 # set and display
                 self.update_labels(file=file)
 
                 # load
+                #print(dt.datetime.now())
                 self.update_labels(status="load and debayer...")
-                image = load_image(file)
+                image, rawshape = load_image(file)
+
+                # write pickle
                 if self.set_write_pickle.get():
-                    self.update_labels(status="save pickle file...\n(takes some time but faster next time)")
-                    write_pickle(image, self.current_file)
+                    self.update_labels(status="save pickle file...")
+                    write_pickle(image, rawshape, self.current_file)
 
                 # edit
                 self.update_labels(status="edit image...")
@@ -785,6 +841,10 @@ class NewGUI():
                                         bias_value=self.bias_value,
                                         shrink_factor=self.radio_shrink.get()
                                         )
+
+                # pixelmap
+                if self.opt_pixelmap.get():
+                    nearest_neighbor_pixelmap(image, file, color=1)
 
                 # gradient
                 if self.opt_gradient.get():
@@ -806,7 +866,11 @@ class NewGUI():
                 # synthetic flat
                 if self.opt_synthflat.get():
                     self.update_labels(status="export synthetic flat...")
-                    export_tif(rad_profile_smoothed, self.current_file, grey_flat=self.set_grey_flat.get(), tif_size=(image.shape[0], image.shape[1]))
+                    if self.set_debayered_flat.get():
+                        tif_size = (rawshape[0], rawshape[1], 3)
+                    else:
+                        tif_size = (rawshape[0], rawshape[1])
+                    export_tif(rad_profile_smoothed, self.current_file, grey_flat=self.set_grey_flat.get(), tif_size=tif_size)
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
