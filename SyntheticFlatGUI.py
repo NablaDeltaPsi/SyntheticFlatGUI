@@ -15,8 +15,6 @@ import matplotlib.pyplot as plt
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.0'
 
-# todo: remote and readme
-
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
@@ -319,20 +317,21 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
     return rad_profile_smoothed
 
 
-def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024)):
+def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024), max_value=1):
     # export tif
-    print("export tif")
+    print("export tif...")
+    print("grey flat: ", grey_flat)
+    print("tif size:  ", tif_size)
+    print("max value: ", max_value)
     if len(tif_size) == 3:
         # like (4024, 6024, 3)
         # save as debayered image
         save_debayered = True
-        print("save debayered tif ...")
         im_syn = np.zeros((int(tif_size[0]), int(tif_size[1]), 3))
     else:
         # (4024, 6024)
         # save as bayer
         save_debayered = False
-        print("save bayer tif ...")
         im_syn = np.zeros((int(tif_size[0]), int(tif_size[1])))
 
     # normalize (again)
@@ -345,8 +344,10 @@ def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024)):
 
     # iterate image and write pixels
     for i in range(im_syn.shape[0]):
-        if i % int(im_syn.shape[0] / 10) == 0:
+        if not i == 0 and i % int(im_syn.shape[0] / 10) == 0:
             print(i, end=" >> ")
+        if not i == 0 and i % int(im_syn.shape[0] / 2) == 0:
+            print("")
         for j in range(im_syn.shape[1]):
 
             # radial position of pixel
@@ -392,12 +393,10 @@ def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024)):
 
     # convert to 16 bit and save image
     savepath = create_folder(file, "Radial_profiles_tifs")
-    im_syn = im_syn / np.max(im_syn)
-    im_syn = ((2 ** 16 - 1) * im_syn).astype(np.uint16)
-    print(im_syn.shape)
-    cv2.imwrite(
-        savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile.tif",
-        im_syn)
+    im_syn = max_value * (2 ** 16 - 1) * im_syn / np.max(im_syn)
+    im_syn = im_syn.astype(np.uint16)
+    print("16-bit maximum: ", np.max(im_syn))
+    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile.tif", im_syn)
 
 
 # STATIC MINOR FUNCTIONS =====================================================
@@ -616,10 +615,10 @@ class NewGUI():
         self.opt_histogram = tk.BooleanVar()
         self.opt_radprof   = tk.BooleanVar()
         self.opt_synthflat = tk.BooleanVar()
-        options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient)
-        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap)
-        options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram)
-        options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof)
+        options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient, command=self.verify_modes)
+        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap, command=self.verify_modes)
+        options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram, command=self.verify_modes)
+        options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof, command=self.verify_modes)
         options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat, command=self.verify_modes)
         menubar.add_cascade(label="Options", menu=options)
 
@@ -630,11 +629,13 @@ class NewGUI():
         self.set_grey_flat       = tk.BooleanVar()
         self.set_debayered_flat  = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
+        self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
+        settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
         settings.add_checkbutton(label="Export synthetic flat debayered", onvalue=1, offvalue=0, variable=self.set_debayered_flat)
-        settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
+        settings.add_checkbutton(label="Scale synthetic flat like original", onvalue=1, offvalue=0, variable=self.set_scale_flat)
         menubar.add_cascade(label="Settings", menu=settings)
 
         # statistics
@@ -712,6 +713,7 @@ class NewGUI():
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
         config_object["SETTINGS"]["set_debayered_flat"]   = str(self.set_debayered_flat.get())
         config_object["SETTINGS"]["set_extrapolate_max"]  = str(self.set_extrapolate_max.get())
+        config_object["SETTINGS"]["set_scale_flat"]       = str(self.set_scale_flat.get())
 
         with open(GUINAME + ".conf", 'w') as conf:
             config_object.write(conf)
@@ -751,6 +753,7 @@ class NewGUI():
             config_object["SETTINGS"]["set_grey_flat"]       = 'False'
             config_object["SETTINGS"]["set_debayered_flat"]  = 'False'
             config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
+            config_object["SETTINGS"]["set_scale_flat"]      = 'False'
 
         # apply
         self.root.geometry(config_object["BASICS"]["window size"])
@@ -770,6 +773,7 @@ class NewGUI():
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered_flat"]        == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
+        self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
         self.update_labels()
 
@@ -871,7 +875,14 @@ class NewGUI():
                         tif_size = (rawshape[0], rawshape[1], 3)
                     else:
                         tif_size = (rawshape[0], rawshape[1])
-                    export_tif(rad_profile_smoothed, self.current_file, grey_flat=self.set_grey_flat.get(), tif_size=tif_size)
+                    if self.set_scale_flat.get():
+                        max_value = apply_statistics(image, 'sigma clip 2.0') / 16384
+                    else:
+                        max_value = 1
+                    export_tif(rad_profile_smoothed, self.current_file,
+                               grey_flat=self.set_grey_flat.get(),
+                               tif_size=tif_size,
+                               max_value=max_value)
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
