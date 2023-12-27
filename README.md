@@ -10,6 +10,8 @@ Um in der Astrofotografie die Vignettierung von Objektiven zu Korrigieren, muss 
 
 Dennoch bringen qualitativ minderwertige oder unpassende Flats oft auch Probleme wie Raining Noise, Überkorrektur oder ringartige Strukturen ins Bild. Dieses Programm ermöglicht die einfache Erstellung synthetischer Flats, um diese Probleme zu umgehen.
 
+![combined](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/cdbc874e-f3fb-4486-88b2-01b8f172d8bb)
+
 ### Schaltflächen
 - Load files: Auswählen eines oder mehrerer RAW-Bilder.
 - Set bias value: Abziehen eines Kameraabhängigen Offset-Wertes vor Berechnung aller folgenden Funktionen
