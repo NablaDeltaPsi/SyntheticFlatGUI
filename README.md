@@ -2,6 +2,8 @@ Python-GUI zum Erstellen von synthetischen Flats und weiterer Rohbild-Analysen
 
 Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Programm verfügbar. Zum Starten nach Herunterladen und Entzippen "SyntheticFlatGUI.exe" ausführen.
 
+Getestet nur für Sony (ARW) RAW-Dateien! 
+
 ![grafik](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/38d00116-180a-4997-882a-1b5b1fd106da)
  
 Um in der Astrofotografie die Vignettierung von Objektiven zu Korrigieren, muss vor dem Stacken ein (Master-) Flat-Frame von den Einzelbildern dividiert werden. Normalerweise erstellt man das Master-Flat, indem mehrere Bilder einer weißen Wand aufgenommen und kombiniert werden, um möglichst wenig zusätzliches Rauschen ins Bild zu bringen.
