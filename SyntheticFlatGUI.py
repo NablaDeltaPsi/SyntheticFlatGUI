@@ -16,7 +16,6 @@ GUINAME = "SyntheticFlatGUI"
 VERSION = '1.0'
 
 # todo: remote and readme
-# todo: include neighbor statistics
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -155,37 +154,38 @@ def calc_histograms(image, file, circular=False):
                delimiter=",",
                fmt=fmt)
 
-def nearest_neighbor_pixelmap(rawimage, file, color=0):
-    rawimage = rawimage[:500, :500, 0]
-
-    rows = rawimage.shape[0]
-    cols = rawimage.shape[1]
-    maxneighbors = np.zeros((rows, cols))
-    for n in range(rows):
-        if n % 500 == 0: print("Row " + str(n))
-        for m in range(cols):
-            neighbors = []
-            for nd in [-1, 0, 1]:
-                for md in [-1, 0, 1]:
-                    if not (nd == 0 and md == 0):
-                        try:
-                            neighbors.append(rawimage[n + nd, m + md])
-                        except:
-                            pass
-            maxneighbors[n, m] = max(neighbors)
-    maxneighbors_ = maxneighbors.flatten()
+def nearest_neighbor_pixelmap(im_deb, file):
+    rows, cols, colors = im_deb.shape
+    flat_pixel_values = []
+    flat_maxneighbors = []
+    for c in range(colors):
+        maxneighbors = np.zeros((rows, cols))
+        for n in range(rows):
+            if n % 500 == 0: print("color: ", c, ", row: ", n)
+            for m in range(cols):
+                neighbors = []
+                for nd in [-1, 0, 1]:
+                    for md in [-1, 0, 1]:
+                        if not (nd == 0 and md == 0):
+                            try:
+                                neighbors.append(im_deb[n + nd, m + md, c])
+                            except:
+                                pass
+                maxneighbors[n, m] = max(neighbors)
+        flat_pixel_values += list(im_deb[:,:,c].flatten())
+        flat_maxneighbors += list(maxneighbors.flatten())
 
     fig = plt.figure(figsize=(7, 5))
     plt.rcParams['font.size'] = 14
-    plt.hist2d(maxneighbors_, rawimage.flatten(), bins=300, range=[[0, 2000], [0, 2000]], norm=mpl.colors.LogNorm(), cmap=plt.cm.jet)
+    plt.hist2d(flat_pixel_values, flat_maxneighbors, bins=300, range=[[0, 2000], [0, 2000]], norm=mpl.colors.LogNorm(), cmap=plt.cm.jet)
     # plt.xticks(range(100,20000,200))
     # plt.yticks(range(100,20000,200))
     plt.xticks([])
     plt.yticks([])
-    plt.xlim([200, 1500])
-    plt.ylim([200, 1500])
-    plt.xlabel('Max of 8 neighbors')
-    plt.ylabel('Pixel value')
+    plt.xlim([0, 2000])
+    plt.ylim([0, 2000])
+    plt.xlabel('Pixel value')
+    plt.ylabel('Max of 8 neighbors')
     plt.colorbar()
     plt.gca().set_aspect('equal')
     fig.tight_layout()
@@ -842,14 +842,15 @@ class NewGUI():
                                         shrink_factor=self.radio_shrink.get()
                                         )
 
-                # pixelmap
-                if self.opt_pixelmap.get():
-                    nearest_neighbor_pixelmap(image, file, color=1)
-
                 # gradient
                 if self.opt_gradient.get():
                     self.update_labels(status="correct gradient...")
                     image_edit = corr_gradient(image_edit, self.current_file)
+
+                # pixelmap
+                if self.opt_pixelmap.get():
+                    self.update_labels(status="calculate pixelmap...")
+                    nearest_neighbor_pixelmap(image_edit, file)
 
                 # histogram
                 if self.opt_histogram.get():
