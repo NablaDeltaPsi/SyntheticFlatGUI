@@ -21,6 +21,8 @@ IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
 ADD_NOISE_LEVEL = 0
 
+RAW_TYPES = '.arw .crw .cr2 .cr3 .nef .raf .rw2'
+IMAGE_TYPES = '.tif .tiff .jpeg .jpg .png'
 
 # STATIC MAJOR FUNCTIONS =====================================================
 def load_image(file):
@@ -570,8 +572,7 @@ def apply_statistics(array, statistics):
     if statistics[:10] == 'sigma clip':
         number = statistics[10:].strip()
         sigma_clip = float(number)
-        reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
-        result = np.mean(reduced)
+        result = sigma_clip_mean(array, sigma_clip=sigma_clip)
     elif statistics == 'median':
         result = np.median(array)
     elif statistics == 'min':
@@ -580,6 +581,11 @@ def apply_statistics(array, statistics):
         result = np.max(array)
     else:
         result = np.mean(array)
+    return result
+
+def sigma_clip_mean(array, sigma_clip=2.0):
+    reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
+    result = np.mean(reduced)
     return result
 
 class NewGUI():
@@ -657,29 +663,32 @@ class NewGUI():
 
         # buttons
         self.button_load = tk.Button(text="Load files", command=self.load_files)
-        self.button_load.grid(row=0, column=0, sticky='NWSE', padx=padding, pady=padding)
+        self.button_load.grid(row=0, column=0, sticky='NWSE', padx=padding, pady=padding, columnspan=2)
         self.button_load = tk.Button(text="Set bias value", command=self.ask_bias)
         self.button_load.grid(row=1, column=0, sticky='NWSE', padx=padding, pady=padding)
+        self.button_load = tk.Button(text="Bias from file", command=self.ask_bias_file)
+        self.button_load.grid(row=1, column=1, sticky='NWSE', padx=padding, pady=padding)
         self.button_start = tk.Button(text="Start", command=self.process)
-        self.button_start.grid(row=2, column=0, sticky='NWSE', padx=padding, pady=padding)
+        self.button_start.grid(row=2, column=0, sticky='NWSE', padx=padding, pady=padding, columnspan=2)
 
         # labels
         self.label_files_var = tk.StringVar()
         self.label_files_var.set("0 files")
         self.label_files = tk.Label(textvariable=self.label_files_var, justify='left')
-        self.label_files.grid(row=0, column=1, sticky='NWSE', padx=padding, pady=padding)
+        self.label_files.grid(row=0, column=2, sticky='NWSE', padx=padding, pady=padding)
         self.label_bias_var = tk.StringVar()
         self.label_bias_var.set(0)
         self.label_bias = tk.Label(textvariable=self.label_bias_var, justify='left')
-        self.label_bias.grid(row=1, column=1, sticky='NWSE', padx=padding, pady=padding)
+        self.label_bias.grid(row=1, column=2, sticky='NWSE', padx=padding, pady=padding)
         self.label_status_var = tk.StringVar()
         self.label_status_var.set("ready")
         self.label_status = tk.Label(textvariable=self.label_status_var, justify='left')
-        self.label_status.grid(row=2, column=1, sticky='NWSE', padx=padding, pady=padding)
+        self.label_status.grid(row=2, column=2, sticky='NWSE', padx=padding, pady=padding)
 
         # configure
-        for i in range(2):
-            self.root.grid_columnconfigure(i, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_columnconfigure(2, weight=3)
         for i in range(3):
             self.root.grid_rowconfigure(i, weight=1)
 
@@ -781,7 +790,7 @@ class NewGUI():
         if self.running:
             return
         user_input = askopenfilename(initialdir=self.lastpath, multiple=True,
-              filetypes=[('all', '.*'), ('.arw', '.arw')])
+              filetypes=[('RAW format (supported)', RAW_TYPES), ('Image format (not supported)', IMAGE_TYPES), ('all', '.*')])
         if user_input:
             self.loaded_files = user_input
             self.update_labels(file=str(len(self.loaded_files)) + " files")
@@ -793,10 +802,21 @@ class NewGUI():
         if self.running:
             return
         user_input = tk.simpledialog.askinteger(title="Bias value", prompt="Which bias value should be subtracted from the image?")
-        if user_input:
-            self.bias_value = int(user_input)
+        self.bias_value = int(user_input)
         self.label_bias_var.set(self.bias_value)
         self.root.update()
+
+    def ask_bias_file(self):
+        if self.running:
+            return
+        self.update_labels(status="calc bias...")
+        user_input_file = askopenfilename(initialdir=self.lastpath, multiple=True,
+              filetypes=[('all', '.*'), ('raw', '.arw')])
+        im_raw = rawpy.imread(user_input_file[0]).raw_image_visible
+        self.bias_value = int(sigma_clip_mean(im_raw))
+        self.label_bias_var.set(self.bias_value)
+        self.update_labels(status="ready")
+        return
 
     def update_labels(self, file="", status=""):
         if file:
@@ -807,6 +827,7 @@ class NewGUI():
         self.label_status_var.set(self.current_status)
         self.label_bias_var.set(self.bias_value)
         self.root.update()
+        return
 
     def process(self):
         if self.running:
@@ -876,7 +897,7 @@ class NewGUI():
                     else:
                         tif_size = (rawshape[0], rawshape[1])
                     if self.set_scale_flat.get():
-                        max_value = apply_statistics(image, 'sigma clip 2.0') / 16384
+                        max_value = sigma_clip_mean(image) / 16384
                     else:
                         max_value = 1
                     export_tif(rad_profile_smoothed, self.current_file,
