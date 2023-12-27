@@ -4,11 +4,13 @@ Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Program
 
 Getestet nur für Sony RAW-Dateien (ARW)! 
 
-![grafik](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/38d00116-180a-4997-882a-1b5b1fd106da)
+![grafik](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/2970f49c-81e3-4042-9ad3-24cfce5690b1)
  
 Um in der Astrofotografie die Vignettierung von Objektiven zu Korrigieren, muss vor dem Stacken ein (Master-) Flat-Frame von den Einzelbildern dividiert werden. Normalerweise erstellt man das Master-Flat, indem mehrere Bilder einer weißen Wand aufgenommen und kombiniert werden, um möglichst wenig zusätzliches Rauschen ins Bild zu bringen.
 
 Dennoch bringen qualitativ minderwertige oder unpassende Flats oft auch Probleme wie Raining Noise, Überkorrektur oder ringartige Strukturen ins Bild. Dieses Programm ermöglicht die einfache Erstellung synthetischer Flats, um diese Probleme zu umgehen.
+
+![combined](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/cdbc874e-f3fb-4486-88b2-01b8f172d8bb)
 
 ### Schaltflächen
 - Load files: Auswählen eines oder mehrerer RAW-Bilder.
