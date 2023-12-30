@@ -12,7 +12,7 @@ Dennoch bringen qualitativ minderwertige oder unpassende Flats oft auch Probleme
 
 ### Vorgehen
 
-![combined](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/cdbc874e-f3fb-4486-88b2-01b8f172d8bb)
+![combined](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/a86f590c-fc2e-45e7-8022-476037b45724)
 
 Die synthetischen Flats können entweder aus üblichen manuellen Wand-Flats oder sogar aus den Lights berechnet werden, solange keine größeren flächigeren Strukturen zu sehen sind (Milchstraße). Zur Erstellung wird das Bild erst vom Bias/Offset-Wert befreit, der manuell angegeben oder aus einem dunklen Bias-Frame geladen werden kann. Anschließend wird ein radiales Profil berechnet, mit einer auswählbaren Sigma-Clipping Statistik manipuliert um Spitzen von Sternen zu entfernen, und anschließend weiter geglättet (Savitzki-Golay Filter). Ausgegeben wird ein TIF in der gleichen Größe wie das Original.
 
