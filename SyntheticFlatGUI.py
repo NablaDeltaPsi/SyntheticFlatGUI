@@ -2,7 +2,7 @@ import tkinter as tk
 import tkinter.font
 import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
-import glob, os, sys, copy, numpy as np#, datetime as dt
+import glob, os, sys, copy, numpy as np
 from configparser import ConfigParser
 import rawpy, cv2
 import pickle, bz2
@@ -805,13 +805,14 @@ class NewGUI():
         self.bias_value = int(user_input)
         self.label_bias_var.set(self.bias_value)
         self.root.update()
+        return
 
     def ask_bias_file(self):
         if self.running:
             return
         self.update_labels(status="calc bias...")
         user_input_file = askopenfilename(initialdir=self.lastpath, multiple=True,
-              filetypes=[('all', '.*'), ('raw', '.arw')])
+              filetypes=[('RAW format (supported)', RAW_TYPES), ('Image format (not supported)', IMAGE_TYPES), ('all', '.*')])
         im_raw = rawpy.imread(user_input_file[0]).raw_image_visible
         self.bias_value = int(sigma_clip_mean(im_raw))
         self.label_bias_var.set(self.bias_value)
@@ -908,17 +909,14 @@ class NewGUI():
                 self.update_labels(status="finished.")
                 print("Finished file.")
 
-
         except Exception as e:
             print("\nERROR!!\n\n")
             self.update_labels(status="unknown error...")
             print(e)
             return
-
         finally:
             self.running = False
             self.update_labels(file=str(len(self.loaded_files)) + " files")
-
         return
 
 

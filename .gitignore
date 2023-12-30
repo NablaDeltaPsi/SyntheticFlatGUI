@@ -16,5 +16,7 @@ scipy/
 *.spec
 *.exe
 *.lnk
+*.todo
 pyinstaller*
 readme_images/
+releases/
