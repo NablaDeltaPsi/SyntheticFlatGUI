@@ -62,14 +62,14 @@ def write_pickle(im_deb, rawshape, file):
         pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
         print("maxrad original: ", int(dist_from_center(0, 0, im_deb)))
 
-def edit_image(im_raw, bias_value=0, shrink_factor='4'):
+def edit_image(im_raw, bias_value=0, resolution_factor=4):
     if bias_value > 0:
         print("subtract bias (" + str(bias_value) + ") ...")
         im_raw = im_raw - bias_value
 
-    if shrink_factor.isnumeric():
+    if resolution_factor > 1:
         print("resize ...")
-        im_raw = resize(im_raw, int(shrink_factor))
+        im_raw = resize(im_raw, resolution_factor)
         print("shape: ", im_raw.shape)
 
     if IGNORE_EDGE:
@@ -81,12 +81,17 @@ def edit_image(im_raw, bias_value=0, shrink_factor='4'):
     return im_raw
 
 
-def corr_gradient(image, file):
-    # save original image
-    image_write = bayer(image[:, :, 1:])
-    savepath = create_folder(file, "Corr_gradient")
-    image_write = np.float32(image_write / np.max(image_write))
-    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + ".tif", image_write)
+def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
+
+    if export_tifs:
+        # save original image
+        print("save original image...")
+        image_write = bayer(image)
+        savepath = create_folder(file, "Corr_gradient")
+        image_write = np.float32(image_write / np.max(image_write))
+        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + ".tif", image_write)
+
+    print("correct gradient...")
 
     # measure slopes
     height, width, colors = image.shape
@@ -95,14 +100,20 @@ def corr_gradient(image, file):
     for c in range(colors):
         rowmeans = []
         for row in range(height):
-            rowmeans.append(np.mean(sigmaclip(image[row,:,c], low=2, high=2)[0]))
-        slope_y = np.mean(np.diff(rowmeans)) * height
+            if row < IGNORE_EDGE or row > height - IGNORE_EDGE:
+                continue
+            if row % resolution_factor == 0:
+                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:width-IGNORE_EDGE,c], low=2, high=2)[0]))
+        slope_y = np.mean(np.diff(rowmeans)) * height / resolution_factor
         slopes_y.append(slope_y)
 
         colmeans = []
         for col in range(width):
-            colmeans.append(np.mean(sigmaclip(image[:,col,c], low=2, high=2)[0]))
-        slope_x = np.mean(np.diff(colmeans)) * width
+            if col < IGNORE_EDGE or col > width - IGNORE_EDGE:
+                continue
+            if col % resolution_factor == 0:
+                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:height-IGNORE_EDGE,col,c], low=2, high=2)[0]))
+        slope_x = np.mean(np.diff(colmeans)) * width / resolution_factor
         slopes_x.append(slope_x)
 
         x = np.linspace(0, 1, width)
@@ -115,11 +126,14 @@ def corr_gradient(image, file):
     print("gradient slopes x: ", slopes_x)
     print("gradient slopes y: ", slopes_y)
 
-    # save corrected image
-    image_write = bayer(image[:, :, 1:])
-    savepath = create_folder(file, "Corr_gradient")
-    image_write = np.float32(image_write / np.max(image_write))
-    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_corr.tif", image_write)
+    if export_tifs:
+        # save corrected image
+        print("save corrected image...")
+        image_write = bayer(image)
+        savepath = create_folder(file, "Corr_gradient")
+        image_write = np.float32(image_write / np.max(image_write))
+        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_corr.tif", image_write)
+
     return image
 
 
@@ -259,7 +273,9 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
             mi = np.argmax(this_filtered)
             maxind.append(mi)
         print("maximum index: ", maxind)
-        rad_profile_cut = rad_profile_cut[max(maxind):, :]
+        if np.max(maxind) > int(rad_profile_cut.shape[0]/2):
+            print("maximum index too large -> skip maximum cut")
+            rad_profile_cut = rad_profile_cut[max(maxind):, :]
         # for c in range(3):
         #     rad_profile_cut[:min_maxind,c+1] = max(rad_profile_cut[:,c+1])
 
@@ -452,6 +468,9 @@ def bayer(array):
                     b_array[2 * i + 0, 2 * j + 0] = array[i, j, c]  # links oben
                 elif c == 1:  # G
                     b_array[2 * i + 1, 2 * j + 0] = array[i, j, c]  # rechts oben
+                    if colors == 3:
+                        b_array[2 * i + 0, 2 * j + 1] = array[i, j, c]  # links unten
+                elif c == 3:  # G
                     b_array[2 * i + 0, 2 * j + 1] = array[i, j, c]  # links unten
                 else:  # B
                     b_array[2 * i + 1, 2 * j + 1] = array[i, j, c]  # rechts unten
@@ -594,8 +613,6 @@ class NewGUI():
         self.root.title(GUINAME + " v" + VERSION)
         self.lastpath = ""
         self.loaded_files = []
-        self.current_file = "0 files"
-        self.current_status = "ready"
         self.bias_value = 0
         self.running = False
         
@@ -614,9 +631,6 @@ class NewGUI():
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
-        # Reset
-        menubar.add_command(label="Reset", command=self.reset_config)
-
         # mainoptions
         options = tk.Menu(menubar, tearoff=0)
         self.opt_gradient  = tk.BooleanVar()
@@ -624,22 +638,24 @@ class NewGUI():
         self.opt_histogram = tk.BooleanVar()
         self.opt_radprof   = tk.BooleanVar()
         self.opt_synthflat = tk.BooleanVar()
-        options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient, command=self.verify_modes)
-        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap, command=self.verify_modes)
-        options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram, command=self.verify_modes)
-        options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof, command=self.verify_modes)
-        options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat, command=self.verify_modes)
+        options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient)
+        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap)
+        options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram)
+        options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof, command=self.toggle_radprof)
+        options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat, command=self.toggle_synthflat)
         menubar.add_cascade(label="Options", menu=options)
 
         # settings
         settings = tk.Menu(menubar, tearoff=0)
         self.set_write_pickle    = tk.BooleanVar()
+        self.set_export_gradient = tk.BooleanVar()
         self.set_circular_hist   = tk.BooleanVar()
         self.set_grey_flat       = tk.BooleanVar()
         self.set_debayered_flat  = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
         self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
+        settings.add_checkbutton(label="Export input and gradient corrected", onvalue=1, offvalue=0, variable=self.set_export_gradient)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
@@ -656,13 +672,16 @@ class NewGUI():
             statistics.add_radiobutton(label=opt, value=opt, variable=self.radio_statistics)
         menubar.add_cascade(label="Statistics", menu=statistics)
 
-        # shrink
-        shrink = tk.Menu(menubar, tearoff=0)
-        self.radio_shrink = tk.StringVar(self.root)
-        self.shrink_factor = ['off', '2', '4', '8', '16']
-        for opt in self.shrink_factor:
-            shrink.add_radiobutton(label=opt, value=opt, variable=self.radio_shrink)
-        menubar.add_cascade(label="Shrink", menu=shrink)
+        # resolution
+        resolution = tk.Menu(menubar, tearoff=0)
+        self.radio_resolution = tk.StringVar(self.root)
+        self.resolution_factor = ['full', '1/2', '1/4', '1/8', '1/16']
+        for opt in self.resolution_factor:
+            resolution.add_radiobutton(label=opt, value=opt, variable=self.radio_resolution)
+        menubar.add_cascade(label="Resolution", menu=resolution)
+
+        # Reset
+        menubar.add_command(label="Reset", command=self.reset_config)
 
         # buttons
         self.button_load = tk.Button(text="Load files", command=self.load_files)
@@ -709,7 +728,7 @@ class NewGUI():
         config_object["BASICS"]["window size"]      = self.root.winfo_geometry()
         config_object["BASICS"]["lastpath"]         = self.lastpath
         config_object["BASICS"]["radio_statistics"] = self.radio_statistics.get()
-        config_object["BASICS"]["radio_shrink"]     = self.radio_shrink.get()
+        config_object["BASICS"]["radio_resolution"] = self.radio_resolution.get()
         config_object["BASICS"]["bias_value"]   = str(self.bias_value)
 
         config_object["OPTIONS"] = {}
@@ -721,6 +740,7 @@ class NewGUI():
 
         config_object["SETTINGS"] = {}
         config_object["SETTINGS"]["set_write_pickle"]     = str(self.set_write_pickle.get())
+        config_object["SETTINGS"]["set_export_gradient"]  = str(self.set_export_gradient.get())
         config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
         config_object["SETTINGS"]["set_debayered_flat"]   = str(self.set_debayered_flat.get())
@@ -732,13 +752,16 @@ class NewGUI():
 
         self.root.destroy()
 
-    def reset_config(self):
+    def reset_config(self, reset_window=False):
         config_object = ConfigParser()
         config_object["BASICS"] = {}
-        config_object["BASICS"]["window size"] = '318x128+313+94'
+        if reset_window:
+            config_object["BASICS"]["window size"] = '318x128+313+94'
+        else:
+            config_object["BASICS"]["window size"] = self.root.winfo_geometry()
         config_object["BASICS"]["lastpath"] = './'
         config_object["BASICS"]["radio_statistics"] = 'sigma clip 2.0'
-        config_object["BASICS"]["radio_shrink"] = '4'
+        config_object["BASICS"]["radio_resolution"] = '1/4'
         config_object["BASICS"]["bias_value"] = '0'
 
         config_object["OPTIONS"] = {}
@@ -750,6 +773,7 @@ class NewGUI():
 
         config_object["SETTINGS"] = {}
         config_object["SETTINGS"]["set_write_pickle"] = 'True'
+        config_object["SETTINGS"]["set_export_gradient"] = 'True'
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
         config_object["SETTINGS"]["set_grey_flat"] = 'False'
         config_object["SETTINGS"]["set_debayered_flat"] = 'False'
@@ -762,7 +786,7 @@ class NewGUI():
         self.root.geometry(config_object["BASICS"]["window size"])
         self.lastpath = config_object["BASICS"]["lastpath"]
         self.radio_statistics.set(config_object["BASICS"]["radio_statistics"])
-        self.radio_shrink.set(config_object["BASICS"]["radio_shrink"])
+        self.radio_resolution.set(config_object["BASICS"]["radio_resolution"])
         self.bias_value = int(config_object["BASICS"]["bias_value"])
 
         self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"]   == 'True')
@@ -772,6 +796,7 @@ class NewGUI():
         self.opt_synthflat.set(config_object["OPTIONS"]["opt_synthflat"] == 'True')
 
         self.set_write_pickle.set(config_object["SETTINGS"]["set_write_pickle"]   == 'True')
+        self.set_export_gradient.set(config_object["SETTINGS"]["set_export_gradient"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered_flat"]        == 'True')
@@ -780,12 +805,15 @@ class NewGUI():
 
         self.update_labels()
 
-    def verify_modes(self):
+    def toggle_radprof(self):
+        if not self.opt_radprof.get():
+            self.opt_synthflat.set(0)
+
+    def toggle_synthflat(self):
         if self.opt_synthflat.get():
             self.opt_radprof.set(1)
 
     def load_config_file(self):
-
         # read
         if os.path.exists(GUINAME + ".conf"):
             config_object = ConfigParser()
@@ -794,7 +822,7 @@ class NewGUI():
 
         # default
         else:
-            self.reset_config()
+            self.reset_config(reset_window=True)
 
     def load_files(self):
         if self.running:
@@ -831,11 +859,9 @@ class NewGUI():
 
     def update_labels(self, file="", status=""):
         if file:
-            self.current_file = file
+            self.label_files_var.set(file)
         if status:
-            self.current_status = status
-        self.label_files_var.set(os.path.basename(self.current_file))
-        self.label_status_var.set(self.current_status)
+            self.label_status_var.set(status)
         self.label_bias_var.set(self.bias_value)
         self.root.update()
         return
@@ -852,14 +878,25 @@ class NewGUI():
             self.running = True
             self.update_labels(status="running...")
         try:
+            counter = 0
+
+            # safety check
             if not self.loaded_files:
                 self.running = False
                 self.update_labels(status="no file chosen.")
                 return
+
+            # resolution factor
+            if self.radio_resolution.get()[2:].isnumeric():
+                resolution_factor = int(self.radio_resolution.get()[2:])
+            else:
+                resolution_factor = 1
+
             for file in self.loaded_files:
 
                 # set and display
-                self.update_labels(file=file)
+                counter += 1
+                self.update_labels(file=os.path.basename(file) + " (" + str(counter) + "/" + str(len(self.loaded_files)) + ")")
 
                 # load
                 #print(dt.datetime.now())
@@ -869,19 +906,22 @@ class NewGUI():
                 # write pickle
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
-                    write_pickle(image, rawshape, self.current_file)
+                    write_pickle(image, rawshape, file)
+
+                # gradient
+                if self.opt_gradient.get():
+                    self.update_labels(status="correct gradient...")
+                    image = corr_gradient(image, file,
+                                          export_tifs=self.set_export_gradient.get(),
+                                          resolution_factor=resolution_factor
+                                          )
 
                 # edit
                 self.update_labels(status="edit image...")
                 image_edit = edit_image(image,
                                         bias_value=self.bias_value,
-                                        shrink_factor=self.radio_shrink.get()
+                                        resolution_factor=resolution_factor
                                         )
-
-                # gradient
-                if self.opt_gradient.get():
-                    self.update_labels(status="correct gradient...")
-                    image_edit = corr_gradient(image_edit, self.current_file)
 
                 # pixelmap
                 if self.opt_pixelmap.get():
@@ -891,12 +931,12 @@ class NewGUI():
                 # histogram
                 if self.opt_histogram.get():
                     self.update_labels(status="calculate histogram...")
-                    calc_histograms(image_edit, self.current_file, self.set_circular_hist.get())
+                    calc_histograms(image_edit, file, self.set_circular_hist.get())
 
                 # radial profile
                 if self.opt_radprof.get():
                     self.update_labels(status="calculate radial profile...")
-                    rad_profile_smoothed = calc_rad_profile(image_edit, self.current_file,
+                    rad_profile_smoothed = calc_rad_profile(image_edit, file,
                                                             statistics=self.radio_statistics.get(),
                                                             extrapolate_max=self.set_extrapolate_max.get())
 
@@ -911,7 +951,7 @@ class NewGUI():
                         max_value = sigma_clip_mean(image) / 16384
                     else:
                         max_value = 1
-                    export_tif(rad_profile_smoothed, self.current_file,
+                    export_tif(rad_profile_smoothed, file,
                                grey_flat=self.set_grey_flat.get(),
                                tif_size=tif_size,
                                max_value=max_value)
