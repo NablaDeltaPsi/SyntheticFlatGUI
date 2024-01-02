@@ -13,7 +13,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.0'
+VERSION = '1.1'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -614,6 +614,9 @@ class NewGUI():
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
+        # Reset
+        menubar.add_command(label="Reset", command=self.reset_config)
+
         # mainoptions
         options = tk.Menu(menubar, tearoff=0)
         self.opt_gradient  = tk.BooleanVar()
@@ -729,42 +732,33 @@ class NewGUI():
 
         self.root.destroy()
 
-    def verify_modes(self):
-        if self.opt_synthflat.get():
-            self.opt_radprof.set(1)
-
-    def load_config_file(self):
+    def reset_config(self):
         config_object = ConfigParser()
+        config_object["BASICS"] = {}
+        config_object["BASICS"]["window size"] = '318x128+313+94'
+        config_object["BASICS"]["lastpath"] = './'
+        config_object["BASICS"]["radio_statistics"] = 'sigma clip 2.0'
+        config_object["BASICS"]["radio_shrink"] = '4'
+        config_object["BASICS"]["bias_value"] = '0'
 
-        # read
-        if os.path.exists(GUINAME + ".conf"):
-            config_object.read(GUINAME + ".conf")
+        config_object["OPTIONS"] = {}
+        config_object["OPTIONS"]["opt_gradient"] = 'True'
+        config_object["OPTIONS"]["opt_pixelmap"] = 'False'
+        config_object["OPTIONS"]["opt_histogram"] = 'False'
+        config_object["OPTIONS"]["opt_radprof"] = 'True'
+        config_object["OPTIONS"]["opt_synthflat"] = 'True'
 
-        # default
-        else:
-            config_object["BASICS"] = {}
-            config_object["BASICS"]["window size"] = '318x128+313+94'
-            config_object["BASICS"]["lastpath"]    = './'
-            config_object["BASICS"]["radio_statistics"]  = 'sigma clip 2.0'
-            config_object["BASICS"]["radio_shrink"]  = '4'
-            config_object["BASICS"]["bias_value"]  = '0'
+        config_object["SETTINGS"] = {}
+        config_object["SETTINGS"]["set_write_pickle"] = 'True'
+        config_object["SETTINGS"]["set_circular_hist"] = 'True'
+        config_object["SETTINGS"]["set_grey_flat"] = 'False'
+        config_object["SETTINGS"]["set_debayered_flat"] = 'False'
+        config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
+        config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
-            config_object["OPTIONS"] = {}
-            config_object["OPTIONS"]["opt_gradient"]  = 'True'
-            config_object["OPTIONS"]["opt_pixelmap"]  = 'False'
-            config_object["OPTIONS"]["opt_histogram"] = 'False'
-            config_object["OPTIONS"]["opt_radprof"]   = 'True'
-            config_object["OPTIONS"]["opt_synthflat"] = 'True'
+        self.apply_config(config_object)
 
-            config_object["SETTINGS"] = {}
-            config_object["SETTINGS"]["set_write_pickle"]    = 'True'
-            config_object["SETTINGS"]["set_circular_hist"]   = 'True'
-            config_object["SETTINGS"]["set_grey_flat"]       = 'False'
-            config_object["SETTINGS"]["set_debayered_flat"]  = 'False'
-            config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
-            config_object["SETTINGS"]["set_scale_flat"]      = 'False'
-
-        # apply
+    def apply_config(self, config_object):
         self.root.geometry(config_object["BASICS"]["window size"])
         self.lastpath = config_object["BASICS"]["lastpath"]
         self.radio_statistics.set(config_object["BASICS"]["radio_statistics"])
@@ -785,6 +779,22 @@ class NewGUI():
         self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
         self.update_labels()
+
+    def verify_modes(self):
+        if self.opt_synthflat.get():
+            self.opt_radprof.set(1)
+
+    def load_config_file(self):
+
+        # read
+        if os.path.exists(GUINAME + ".conf"):
+            config_object = ConfigParser()
+            config_object.read(GUINAME + ".conf")
+            self.apply_config(config_object)
+
+        # default
+        else:
+            self.reset_config()
 
     def load_files(self):
         if self.running:
