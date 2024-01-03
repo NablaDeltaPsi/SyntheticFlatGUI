@@ -69,9 +69,9 @@ def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
         # save original image
         print("save original image...")
         image_write = bayer(image)
-        savepath = create_folder(file, "Corr_gradient")
+        savepath = create_folder(file, "Input_corrected")
         image_write = np.float32(image_write / np.max(image_write))
-        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + ".tif", image_write)
+        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_0_input.tif", image_write)
 
     print("correct gradient...")
 
@@ -112,9 +112,9 @@ def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
         # save corrected image
         print("save corrected image...")
         image_write = bayer(image)
-        savepath = create_folder(file, "Corr_gradient")
+        savepath = create_folder(file, "Input_corrected")
         image_write = np.float32(image_write / np.max(image_write))
-        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_corr.tif", image_write)
+        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_1_corr.tif", image_write)
 
     return image
 
@@ -410,6 +410,17 @@ def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024), max_va
     print("16-bit maximum: ", np.max(im_syn))
     cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile.tif", im_syn)
 
+    return im_syn
+
+
+def export_flat_corr(image, image_flat, file):
+
+    # convert to 16 bit and save image
+    image_write = bayer(image) / image_flat
+    savepath = create_folder(file, "Input_corrected")
+    image_write = np.float32(image_write / np.max(image_write))
+    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_2_flatcorr.tif", image_write)
+
 
 # STATIC MINOR FUNCTIONS =====================================================
 
@@ -436,7 +447,7 @@ def mindist(array_):
 def debayer(array):
     rows = array.shape[0]
     cols = array.shape[1]
-    db_array = np.zeros((int(rows / 2) + 1, int(cols / 2) + 1, 4))
+    db_array = np.zeros((int(rows / 2), int(cols / 2), 4))
     for n in range(rows):
         for m in range(cols):
             if n % 2 == 0 and m % 2 == 0:  # links oben
@@ -642,18 +653,18 @@ class NewGUI():
         # settings
         settings = tk.Menu(menubar, tearoff=0)
         self.set_write_pickle    = tk.BooleanVar()
-        self.set_export_gradient = tk.BooleanVar()
+        self.set_export_corr_input = tk.BooleanVar()
         self.set_circular_hist   = tk.BooleanVar()
         self.set_grey_flat       = tk.BooleanVar()
-        self.set_debayered_flat  = tk.BooleanVar()
+        self.set_debayered       = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
         self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
-        settings.add_checkbutton(label="Export input and gradient corrected", onvalue=1, offvalue=0, variable=self.set_export_gradient)
+        settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
-        settings.add_checkbutton(label="Export synthetic flat debayered", onvalue=1, offvalue=0, variable=self.set_debayered_flat)
+        settings.add_checkbutton(label="Export all images debayered", onvalue=1, offvalue=0, variable=self.set_debayered)
         settings.add_checkbutton(label="Scale synthetic flat like original", onvalue=1, offvalue=0, variable=self.set_scale_flat)
         menubar.add_cascade(label="Settings", menu=settings)
 
@@ -734,10 +745,10 @@ class NewGUI():
 
         config_object["SETTINGS"] = {}
         config_object["SETTINGS"]["set_write_pickle"]     = str(self.set_write_pickle.get())
-        config_object["SETTINGS"]["set_export_gradient"]  = str(self.set_export_gradient.get())
+        config_object["SETTINGS"]["set_export_corr_input"]  = str(self.set_export_corr_input.get())
         config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
-        config_object["SETTINGS"]["set_debayered_flat"]   = str(self.set_debayered_flat.get())
+        config_object["SETTINGS"]["set_debayered"]        = str(self.set_debayered.get())
         config_object["SETTINGS"]["set_extrapolate_max"]  = str(self.set_extrapolate_max.get())
         config_object["SETTINGS"]["set_scale_flat"]       = str(self.set_scale_flat.get())
 
@@ -767,10 +778,10 @@ class NewGUI():
 
         config_object["SETTINGS"] = {}
         config_object["SETTINGS"]["set_write_pickle"] = 'True'
-        config_object["SETTINGS"]["set_export_gradient"] = 'True'
+        config_object["SETTINGS"]["set_export_corr_input"] = 'True'
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
         config_object["SETTINGS"]["set_grey_flat"] = 'False'
-        config_object["SETTINGS"]["set_debayered_flat"] = 'False'
+        config_object["SETTINGS"]["set_debayered"] = 'False'
         config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
         config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
@@ -790,10 +801,10 @@ class NewGUI():
         self.opt_synthflat.set(config_object["OPTIONS"]["opt_synthflat"] == 'True')
 
         self.set_write_pickle.set(config_object["SETTINGS"]["set_write_pickle"]   == 'True')
-        self.set_export_gradient.set(config_object["SETTINGS"]["set_export_gradient"]   == 'True')
+        self.set_export_corr_input.set(config_object["SETTINGS"]["set_export_corr_input"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
-        self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered_flat"]        == 'True')
+        self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered"]         == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
         self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
@@ -906,7 +917,7 @@ class NewGUI():
                 if self.opt_gradient.get():
                     self.update_labels(status="correct gradient...")
                     image = corr_gradient(image, file,
-                                          export_tifs=self.set_export_gradient.get(),
+                                          export_tifs=self.set_export_corr_input.get(),
                                           resolution_factor=resolution_factor
                                           )
 
@@ -935,7 +946,7 @@ class NewGUI():
                 # synthetic flat
                 if self.opt_synthflat.get():
                     self.update_labels(status="export synthetic flat...")
-                    if self.set_debayered_flat.get():
+                    if self.set_debayered.get():
                         tif_size = (rawshape[0], rawshape[1], 3)
                     else:
                         tif_size = (rawshape[0], rawshape[1])
@@ -943,10 +954,14 @@ class NewGUI():
                         max_value = sigma_clip_mean(image) / 16384
                     else:
                         max_value = 1
-                    export_tif(rad_profile_smoothed, file,
+                    image_flat = export_tif(rad_profile_smoothed, file,
                                grey_flat=self.set_grey_flat.get(),
                                tif_size=tif_size,
                                max_value=max_value)
+
+                if self.set_export_corr_input.get():
+                    self.update_labels(status="export flat-corrected...")
+                    export_flat_corr(image, image_flat, file)
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
