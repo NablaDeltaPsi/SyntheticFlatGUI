@@ -68,7 +68,7 @@ Die relative Intensität des synthetischen Flats wird nicht auf 1 normiert sonde
 ### Statistics
 Auswählen der verwendeten Statistik zur Berechnung des radialen Profils. Auf einem Ring (vgl. Bild oben) liegen mehrere Pixel mit unterschiedlichen Werten. Aus diesen Werten pro Ring kann der Mittelwert, der Median, das Maximum, oder das Minimum genommen werden, oder sie werden erst mit einem Sigma-Clipping aussortiert (empfohlen) und erst dann der Mittelwert genommen.
 
-### Shrink
-Die Berechnung des radialen Profils für ein 24 MP Bild kann einige Zeit dauern, obwohl eine so große Auflösung gar nicht nötig ist. Deshalb kann mit dieser Option das Bild verkleinert und die Statistik mit diesem Verkleinerten Bild berechnet werden. Wichtig: Die Verkleinerung spielt nur für die statistischen Funktionen (Pixelmap, Histogramm, radiales Profil) eine Rolle, das ausgegebene synthetische Flat hat stets die gleiche Größe wie das Ursprungsbild! 
+### Resolution
+Die Berechnung des radialen Profils für ein 24 MP Bild kann einige Zeit dauern, obwohl eine so große Auflösung gar nicht nötig ist. Deshalb kann mit dieser Option die Statistik mit einem verkleinerten Bild berechnet werden. Wichtig: Die Verkleinerung spielt nur für die statistischen Funktionen (Pixelmap, Histogramm, radiales Profil) eine Rolle, alle ausgegebenen Bilder haben aber immer stets die gleiche Größe wie das Ursprungsbild! 
 
 
