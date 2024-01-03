@@ -62,24 +62,6 @@ def write_pickle(im_deb, rawshape, file):
         pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
         print("maxrad original: ", int(dist_from_center(0, 0, im_deb)))
 
-def edit_image(im_raw, bias_value=0, resolution_factor=4):
-    if bias_value > 0:
-        print("subtract bias (" + str(bias_value) + ") ...")
-        im_raw = im_raw - bias_value
-
-    if resolution_factor > 1:
-        print("resize ...")
-        im_raw = resize(im_raw, resolution_factor)
-        print("shape: ", im_raw.shape)
-
-    if IGNORE_EDGE:
-        print("ignore edge ...")
-        edge_size = IGNORE_EDGE
-        im_raw = im_raw[edge_size:-edge_size, edge_size:-edge_size, :]
-        print("shape: ", im_raw.shape)
-
-    return im_raw
-
 
 def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
 
@@ -103,7 +85,7 @@ def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
             if row < IGNORE_EDGE or row > height - IGNORE_EDGE:
                 continue
             if row % resolution_factor == 0:
-                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:width-IGNORE_EDGE,c], low=2, high=2)[0]))
+                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:-IGNORE_EDGE,c], low=2, high=2)[0]))
         slope_y = np.mean(np.diff(rowmeans)) * height / resolution_factor
         slopes_y.append(slope_y)
 
@@ -112,7 +94,7 @@ def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
             if col < IGNORE_EDGE or col > width - IGNORE_EDGE:
                 continue
             if col % resolution_factor == 0:
-                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:height-IGNORE_EDGE,col,c], low=2, high=2)[0]))
+                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:-IGNORE_EDGE,col,c], low=2, high=2)[0]))
         slope_x = np.mean(np.diff(colmeans)) * width / resolution_factor
         slopes_x.append(slope_x)
 
@@ -168,15 +150,20 @@ def calc_histograms(image, file, circular=False):
                delimiter=",",
                fmt=fmt)
 
-def nearest_neighbor_pixelmap(im_deb, file):
+def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
     rows, cols, colors = im_deb.shape
     flat_pixel_values = []
     flat_maxneighbors = []
     for c in range(colors):
         maxneighbors = np.zeros((rows, cols))
         for n in range(rows):
-            if n % 500 == 0: print("color: ", c, ", row: ", n)
+            if n % 500 == 0:
+                print("color: ", c, ", row: ", n)
+            if n % resolution_factor == 0:
+                continue
             for m in range(cols):
+                if m % resolution_factor == 0:
+                    continue
                 neighbors = []
                 for nd in [-1, 0, 1]:
                     for md in [-1, 0, 1]:
@@ -208,7 +195,7 @@ def nearest_neighbor_pixelmap(im_deb, file):
     plt.show()
 
 
-def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
+def calc_rad_profile(image, file, statistics=2, extrapolate_max=True, resolution_factor=4):
     print("calculate radial profiles ...")
     image_width = image.shape[1]
     image_height = image.shape[0]
@@ -220,6 +207,10 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
         for j in range(image_width):
             rad = int(dist_from_center(i, j, image))
             if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0 and image[i, j, 3] > 0):
+                continue
+            if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
+                continue
+            if not (i % resolution_factor == 0 and j % resolution_factor == 0):
                 continue
             if not rad in radii:
                 radii.append(rad)
@@ -275,6 +266,7 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
         print("maximum index: ", maxind)
         if np.max(maxind) > int(rad_profile_cut.shape[0]/2):
             print("maximum index too large -> skip maximum cut")
+        else:
             rad_profile_cut = rad_profile_cut[max(maxind):, :]
         # for c in range(3):
         #     rad_profile_cut[:min_maxind,c+1] = max(rad_profile_cut[:,c+1])
@@ -298,6 +290,8 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
             xlast = x_new[0]
             slope = (y_new[1] - y_new[0]) / xdist
             # slope = np.mean(np.diff(y_new[:int(len(y_new)/10)])) / xdist
+            if slope > 0:
+                slope = 0
             slopes.append(int(slope))
             xadd = np.arange(0, xlast * 0.999, xdist)
             # quadratic function with given value and slope at xlast and zero derivative at x=0
@@ -315,7 +309,7 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True):
         rad_profile_smoothed = np.column_stack((rad_profile_smoothed, y_new))
 
     if extrapolate_max:
-        print("extrapolate with slopes: ", slopes)
+        print("extrapolated with slopes: ", slopes)
 
     # normalize by smoothed curve
     for c in range(3):
@@ -916,29 +910,27 @@ class NewGUI():
                                           resolution_factor=resolution_factor
                                           )
 
-                # edit
-                self.update_labels(status="edit image...")
-                image_edit = edit_image(image,
-                                        bias_value=self.bias_value,
-                                        resolution_factor=resolution_factor
-                                        )
+                # subtract bias
+                self.update_labels(status="subtract bias...")
+                image = image - self.bias_value
 
                 # pixelmap
                 if self.opt_pixelmap.get():
                     self.update_labels(status="calculate pixelmap...")
-                    nearest_neighbor_pixelmap(image_edit, file)
+                    nearest_neighbor_pixelmap(image, file, resolution_factor=resolution_factor)
 
                 # histogram
                 if self.opt_histogram.get():
                     self.update_labels(status="calculate histogram...")
-                    calc_histograms(image_edit, file, self.set_circular_hist.get())
+                    calc_histograms(image, file, self.set_circular_hist.get())
 
                 # radial profile
                 if self.opt_radprof.get():
                     self.update_labels(status="calculate radial profile...")
-                    rad_profile_smoothed = calc_rad_profile(image_edit, file,
+                    rad_profile_smoothed = calc_rad_profile(image, file,
                                                             statistics=self.radio_statistics.get(),
-                                                            extrapolate_max=self.set_extrapolate_max.get())
+                                                            extrapolate_max=self.set_extrapolate_max.get(),
+                                                            resolution_factor=resolution_factor)
 
                 # synthetic flat
                 if self.opt_synthflat.get():
