@@ -29,6 +29,7 @@ IMAGE_TYPES = '.tif .tiff .jpeg .jpg .png'
 def load_image(file):
     print("")
     print(file)
+    print("Trying to load pickle file...")
     if not os.path.isfile(file):
         print("File does not exist!\n\n")
         sys.exit()
@@ -64,15 +65,7 @@ def write_pickle(im_deb, rawshape, file):
         print("maxrad original: ", int(dist_from_center(0, 0, im_deb)))
 
 
-def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
-
-    if export_tifs:
-        # save original image
-        print("save original image...")
-        image_write = bayer(image)
-        savepath = create_folder(file, "Input_corrected")
-        image_write = np.float32(image_write / np.max(image_write))
-        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_0_input.tif", image_write)
+def corr_gradient(image, resolution_factor=4):
 
     print("correct gradient...")
 
@@ -108,14 +101,6 @@ def corr_gradient(image, file, export_tifs=True, resolution_factor=4):
     # print
     print("gradient slopes x: ", slopes_x)
     print("gradient slopes y: ", slopes_y)
-
-    if export_tifs:
-        # save corrected image
-        print("save corrected image...")
-        image_write = bayer(image)
-        savepath = create_folder(file, "Input_corrected")
-        image_write = np.float32(image_write / np.max(image_write))
-        cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_1_corr.tif", image_write)
 
     return image
 
@@ -330,7 +315,7 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True, resolution
     return rad_profile_smoothed
 
 
-def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024), max_value=1):
+def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
     # export tif
     print("export tif...")
     print("grey flat: ", grey_flat)
@@ -404,12 +389,10 @@ def export_tif(rad_profile, file, grey_flat=False, tif_size=(4024, 6024), max_va
     # final row print
     print(i)
 
-    # convert to 16 bit and save image
-    savepath = create_folder(file, "Radial_profiles_tifs")
+    # convert to 16 bit
     im_syn = max_value * (2 ** 16 - 1) * im_syn / np.max(im_syn)
     im_syn = im_syn.astype(np.uint16)
     print("16-bit maximum: ", np.max(im_syn))
-    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile.tif", im_syn)
 
     return im_syn
 
@@ -526,7 +509,7 @@ def resize(array, factor):
     return new_array
 
 
-def dist_from_center(i, j, mat):
+def dist_from_center(i, j, mat): # todo: use shape, not matrix
     n = len(mat[:, 0])
     m = len(mat[0, :])
     rad = np.sqrt((i - n / 2) ** 2 + (j - m / 2) ** 2)
@@ -612,6 +595,15 @@ def sigma_clip_mean(array, sigma_clip=2.0):
     reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
     result = np.mean(reduced)
     return result
+
+def write_tif_image(image, original_file, folder, suffix, already_bayered=False):
+    if not already_bayered:
+        image_write = bayer(image)
+    else:
+        image_write = image
+    savepath = create_folder(original_file, folder)
+    image_write = np.float32(image_write / np.max(image_write))
+    cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
 
 class NewGUI():
     def __init__(self):
@@ -732,6 +724,7 @@ class NewGUI():
     def stop(self):
         print("asked_stop:", self.asked_stop, end=' ')
         self.asked_stop = True
+        self.update_labels(status="stopping...")
         print("to", self.asked_stop)
 
     def check_stop(self):
@@ -929,13 +922,22 @@ class NewGUI():
                     write_pickle(image, rawshape, file)
                 if self.check_stop(): return
 
+                # write original image
+                self.update_labels(status="write original tif...")
+                if self.set_export_corr_input.get():
+                    write_tif_image(image, file, "TIF_images", "_0_input")
+                if self.check_stop(): return
+
                 # gradient
                 if self.opt_gradient.get():
-                    self.update_labels(status="correct gradient...")
-                    image = corr_gradient(image, file,
-                                          export_tifs=self.set_export_corr_input.get(),
-                                          resolution_factor=resolution_factor
-                                          )
+                    self.update_labels(status="calc gradient...")
+                    image = corr_gradient(image, resolution_factor=resolution_factor)
+                if self.check_stop(): return
+
+                # write gradient-corrected image
+                self.update_labels(status="write gradcorr tif...")
+                if self.set_export_corr_input.get():
+                    write_tif_image(image, file, "TIF_images", "_1_gradcorr")
                 if self.check_stop(): return
 
                 # subtract bias
@@ -945,19 +947,19 @@ class NewGUI():
 
                 # pixelmap
                 if self.opt_pixelmap.get():
-                    self.update_labels(status="calculate pixelmap...")
+                    self.update_labels(status="calc pixelmap...")
                     nearest_neighbor_pixelmap(image, file, resolution_factor=resolution_factor)
                 if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
-                    self.update_labels(status="calculate histogram...")
+                    self.update_labels(status="calc histogram...")
                     calc_histograms(image, file, self.set_circular_hist.get())
                 if self.check_stop(): return
 
                 # radial profile
                 if self.opt_radprof.get():
-                    self.update_labels(status="calculate radial profile...")
+                    self.update_labels(status="calc radial profile...")
                     rad_profile_smoothed = calc_rad_profile(image, file,
                                                             statistics=self.radio_statistics.get(),
                                                             extrapolate_max=self.set_extrapolate_max.get(),
@@ -966,7 +968,7 @@ class NewGUI():
 
                 # synthetic flat
                 if self.opt_synthflat.get():
-                    self.update_labels(status="export synthetic flat...")
+                    self.update_labels(status="calc synthetic flat...")
                     if self.set_debayered.get():
                         tif_size = (rawshape[0], rawshape[1], 3)
                     else:
@@ -975,24 +977,31 @@ class NewGUI():
                         max_value = sigma_clip_mean(image) / 16384
                     else:
                         max_value = 1
-                    image_flat = export_tif(rad_profile_smoothed, file,
+                    image_flat = calc_synthetic_flat(rad_profile_smoothed,
                                grey_flat=self.set_grey_flat.get(),
                                tif_size=tif_size,
                                max_value=max_value)
-                if self.check_stop(): return
+                    if self.check_stop(): return
 
-                # correct input
-                if self.set_export_corr_input.get():
-                    self.update_labels(status="export flat-corrected...")
-                    export_flat_corr(image, image_flat, file)
+                    # write synthetic flat tif
+                    self.update_labels(status="write synthflat tif...")
+                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat", already_bayered=True)
+                    if self.check_stop(): return
+
+                    # correct input
+                    if self.set_export_corr_input.get():
+                        self.update_labels(status="export flat-corrected...")
+                        write_tif_image(bayer(image) / image_flat, file, "TIF_images", "_3_flatcorr", already_bayered=True)
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
 
         except Exception as e:
-            print("\nERROR!!\n\n")
+            print("\nERROR!!")
+            print("during status:", self.label_status_var.get())
+            print("message:", e)
+            print("\n\n")
             self.update_labels(status="unknown error...")
-            print(e)
             return
         finally:
             self.running = False
