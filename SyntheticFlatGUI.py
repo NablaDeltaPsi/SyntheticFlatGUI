@@ -62,7 +62,7 @@ def write_pickle(im_deb, rawshape, file):
         print("write pickle file ...")
         pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
         pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
-        print("maxrad original: ", int(dist_from_center(0, 0, im_deb)))
+        print("maxrad original: ", int(dist_from_center(0, 0, im_deb.shape)))
 
 
 def corr_gradient(image, resolution_factor=4):
@@ -112,7 +112,7 @@ def calc_histograms(image, file, circular=False):
         if circular:
             for i in range(image.shape[0]):
                 for j in range(image.shape[1]):
-                    thisdist = dist_from_center(i, j, image)
+                    thisdist = dist_from_center(i, j, image.shape)
                     if thisdist > image.shape[0] / 2 or thisdist > image.shape[1] / 2:
                         image[i, j, c] = np.nan
 
@@ -185,13 +185,13 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True, resolution
     print("calculate radial profiles ...")
     image_width = image.shape[1]
     image_height = image.shape[0]
-    maxrad = int(dist_from_center(0, 0, image))
+    maxrad = int(dist_from_center(0, 0, image.shape))
     radii = []
     rad_counts = {}
     rad_pixels = {}
     for i in range(image_height):
         for j in range(image_width):
-            rad = int(dist_from_center(i, j, image))
+            rad = int(dist_from_center(i, j, image.shape))
             if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0 and image[i, j, 3] > 0):
                 continue
             if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
@@ -337,7 +337,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
         rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
 
     # match profile to output size
-    maxrad_this = dist_from_center(0, 0, im_syn)
+    maxrad_this = dist_from_center(0, 0, im_syn.shape)
     print("maxrad synthetic: ", int(maxrad_this))
 
     # iterate image and write pixels
@@ -349,7 +349,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
         for j in range(im_syn.shape[1]):
 
             # radial position of pixel
-            r = dist_from_center(i, j, im_syn) / maxrad_this
+            r = dist_from_center(i, j, im_syn.shape) / maxrad_this
 
             # search match within small range in radial profile
             # r_index = get_closest(r, rad_profile[:,0])
@@ -509,9 +509,9 @@ def resize(array, factor):
     return new_array
 
 
-def dist_from_center(i, j, mat): # todo: use shape, not matrix
-    n = len(mat[:, 0])
-    m = len(mat[0, :])
+def dist_from_center(i, j, shape):
+    n = shape[0]
+    m = shape[1]
     rad = np.sqrt((i - n / 2) ** 2 + (j - m / 2) ** 2)
     return rad
 
