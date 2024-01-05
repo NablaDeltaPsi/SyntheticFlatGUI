@@ -11,9 +11,10 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import threading
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.1'
+VERSION = '1.2'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -620,6 +621,7 @@ class NewGUI():
         self.loaded_files = []
         self.bias_value = 0
         self.running = False
+        self.asked_stop = False
         
         padding = 5
 
@@ -695,8 +697,10 @@ class NewGUI():
         self.button_load.grid(row=1, column=0, sticky='NWSE', padx=padding, pady=padding)
         self.button_load = tk.Button(text="Bias from file", command=self.ask_bias_file)
         self.button_load.grid(row=1, column=1, sticky='NWSE', padx=padding, pady=padding)
-        self.button_start = tk.Button(text="Start", command=self.process)
-        self.button_start.grid(row=2, column=0, sticky='NWSE', padx=padding, pady=padding, columnspan=2)
+        self.button_start = tk.Button(text="Start", command=lambda: threading.Thread(target=self.process).start())
+        self.button_start.grid(row=2, column=0, sticky='NWSE', padx=padding, pady=padding)
+        self.button_stop = tk.Button(text="Stop", command=self.stop)
+        self.button_stop.grid(row=2, column=1, sticky='NWSE', padx=padding, pady=padding)
 
         # labels
         self.label_files_var = tk.StringVar()
@@ -724,6 +728,21 @@ class NewGUI():
 
         # mainloop
         self.root.mainloop()
+
+    def stop(self):
+        print("asked_stop:", self.asked_stop, end=' ')
+        self.asked_stop = True
+        print("to", self.asked_stop)
+
+    def check_stop(self):
+        if self.asked_stop:
+            self.running = False
+            self.update_labels(status="interrupted")
+            print("\nInterrupted!\n")
+            self.asked_stop = False
+            return True
+        else:
+            return False
 
     def on_close(self):
         print("... save config file")
@@ -873,11 +892,6 @@ class NewGUI():
 
     def process(self):
         if self.running:
-            # print("exit")
-            # self.root.quit()
-            # self.running = False
-            # self.root.mainloop()
-            # self.update_labels(status="ready")
             return
         else:
             self.running = True
@@ -907,11 +921,13 @@ class NewGUI():
                 #print(dt.datetime.now())
                 self.update_labels(status="load and debayer...")
                 image, rawshape = load_image(file)
+                if self.check_stop(): return
 
                 # write pickle
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
                     write_pickle(image, rawshape, file)
+                if self.check_stop(): return
 
                 # gradient
                 if self.opt_gradient.get():
@@ -920,20 +936,24 @@ class NewGUI():
                                           export_tifs=self.set_export_corr_input.get(),
                                           resolution_factor=resolution_factor
                                           )
+                if self.check_stop(): return
 
                 # subtract bias
                 self.update_labels(status="subtract bias...")
                 image = image - self.bias_value
+                if self.check_stop(): return
 
                 # pixelmap
                 if self.opt_pixelmap.get():
                     self.update_labels(status="calculate pixelmap...")
                     nearest_neighbor_pixelmap(image, file, resolution_factor=resolution_factor)
+                if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
                     self.update_labels(status="calculate histogram...")
                     calc_histograms(image, file, self.set_circular_hist.get())
+                if self.check_stop(): return
 
                 # radial profile
                 if self.opt_radprof.get():
@@ -942,6 +962,7 @@ class NewGUI():
                                                             statistics=self.radio_statistics.get(),
                                                             extrapolate_max=self.set_extrapolate_max.get(),
                                                             resolution_factor=resolution_factor)
+                if self.check_stop(): return
 
                 # synthetic flat
                 if self.opt_synthflat.get():
@@ -958,7 +979,9 @@ class NewGUI():
                                grey_flat=self.set_grey_flat.get(),
                                tif_size=tif_size,
                                max_value=max_value)
+                if self.check_stop(): return
 
+                # correct input
                 if self.set_export_corr_input.get():
                     self.update_labels(status="export flat-corrected...")
                     export_flat_corr(image, image_flat, file)
