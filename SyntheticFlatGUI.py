@@ -20,7 +20,6 @@ VERSION = '1.2'
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
-ADD_NOISE_LEVEL = 0
 
 RAW_TYPES = '.arw .crw .cr2 .cr3 .nef .raf .rw2'
 IMAGE_TYPES = '.tif .tiff .jpeg .jpg .png'
@@ -105,7 +104,7 @@ def corr_gradient(image, resolution_factor=4):
     return image
 
 
-def calc_histograms(image, file, circular=False):
+def calc_histograms(image, circular=False):
     print("calculate histograms ...")
     for c in range(3):
 
@@ -128,13 +127,7 @@ def calc_histograms(image, file, circular=False):
         if c == 0:
             data = bins
         data = np.column_stack((data, counts))
-
-    # save
-    savepath = create_folder(file, "Histograms")
-    fmt = '%.5f', '%d', '%d', '%d'
-    np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_histograms.csv", data,
-               delimiter=",",
-               fmt=fmt)
+    return data
 
 def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
     rows, cols, colors = im_deb.shape
@@ -181,7 +174,7 @@ def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
     plt.show()
 
 
-def calc_rad_profile(image, file, statistics=2, extrapolate_max=True, resolution_factor=4):
+def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
     print("calculate radial profiles ...")
     image_width = image.shape[1]
     image_height = image.shape[0]
@@ -304,15 +297,7 @@ def calc_rad_profile(image, file, statistics=2, extrapolate_max=True, resolution
         rad_profile_cut[:, c + 1] = rad_profile_cut[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
         rad_profile_smoothed[:, c + 1] = rad_profile_smoothed[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
 
-    # save
-    print("save csv ...")
-    savepath = create_folder(file, "Radial_profiles")
-    fmt = '%.5f', '%.5f', '%.5f', '%.5f'
-    np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile_0_raw_mean.csv", rad_profile_raw_mean, delimiter=",", fmt=fmt)
-    np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile_1_clipped.csv", rad_profile, delimiter=",", fmt=fmt)
-    np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile_2_cut.csv", rad_profile_cut, delimiter=",", fmt=fmt)
-    np.savetxt(savepath + os.sep + os.path.basename(file).split('.')[0] + "_radial_profile_3_smooth.csv", rad_profile_smoothed[::int(RADIAL_RESOLUTION / 1000)], delimiter=",", fmt=fmt)
-    return rad_profile_smoothed
+    return rad_profile_raw_mean, rad_profile, rad_profile_cut, rad_profile_smoothed
 
 
 def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
@@ -352,15 +337,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
             r = dist_from_center(i, j, im_syn.shape) / maxrad_this
 
             # search match within small range in radial profile
-            # r_index = get_closest(r, rad_profile[:,0])
             r_index = int((RADIAL_RESOLUTION - 1) * r)
-
-            # check deviation
-            if abs(rad_profile[r_index, 0] - r) > 0.001:
-                print("Radial deviation is larger than 0.1%!")
-                print("rad: ", r, ", found: ", rad_profile[r_index, 0])
-                print("Interrupt!!")
-                sys.exit()
 
             # calculate brightness and set new image pixel
             if save_debayered:
@@ -379,13 +356,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
                     if i % 2 == 1 and j % 2 == 1:  # rechts unten
                         im_syn[i, j] = rad_profile[r_index, 3]  # B
 
-    # add noise for dithering
-    if ADD_NOISE_LEVEL > 0:
-        if save_debayered:
-            im_syn = im_syn + ADD_NOISE_LEVEL * (np.random.rand(im_syn.shape[0], im_syn.shape[1], 3) - 0.5)
-        else:
-            im_syn = im_syn + ADD_NOISE_LEVEL * (np.random.rand(im_syn.shape[0], im_syn.shape[1]) - 0.5)
-
     # final row print
     print(i)
 
@@ -396,14 +366,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
 
     return im_syn
 
-
-def export_flat_corr(image, image_flat, file):
-
-    # convert to 16 bit and save image
-    image_write = bayer(image) / image_flat
-    savepath = create_folder(file, "Input_corrected")
-    image_write = np.float32(image_write / np.max(image_write))
-    cv2.imwrite(savepath + os.sep + os.path.basename(file).split('.')[0] + "_2_flatcorr.tif", image_write)
 
 
 # STATIC MINOR FUNCTIONS =====================================================
@@ -604,6 +566,12 @@ def write_tif_image(image, original_file, folder, suffix, already_bayered=False)
     savepath = create_folder(original_file, folder)
     image_write = np.float32(image_write / np.max(image_write))
     cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
+
+def write_csv(data, original_file, folder, suffix):
+    savepath = create_folder(original_file, folder)
+    fmt = '%.5f', '%d', '%d', '%d'
+    np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
+               data, delimiter=",", fmt=fmt)
 
 class NewGUI():
     def __init__(self):
@@ -920,25 +888,25 @@ class NewGUI():
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
                     write_pickle(image, rawshape, file)
-                if self.check_stop(): return
+                    if self.check_stop(): return
 
                 # write original image
-                self.update_labels(status="write original tif...")
                 if self.set_export_corr_input.get():
+                    self.update_labels(status="write original tif...")
                     write_tif_image(image, file, "TIF_images", "_0_input")
-                if self.check_stop(): return
+                    if self.check_stop(): return
 
                 # gradient
                 if self.opt_gradient.get():
                     self.update_labels(status="calc gradient...")
                     image = corr_gradient(image, resolution_factor=resolution_factor)
-                if self.check_stop(): return
+                    if self.check_stop(): return
 
-                # write gradient-corrected image
-                self.update_labels(status="write gradcorr tif...")
-                if self.set_export_corr_input.get():
-                    write_tif_image(image, file, "TIF_images", "_1_gradcorr")
-                if self.check_stop(): return
+                    # write gradient-corrected image
+                    if self.set_export_corr_input.get():
+                        self.update_labels(status="write gradcorr tif...")
+                        write_tif_image(image, file, "TIF_images", "_1_gradcorr")
+                        if self.check_stop(): return
 
                 # subtract bias
                 self.update_labels(status="subtract bias...")
@@ -949,22 +917,27 @@ class NewGUI():
                 if self.opt_pixelmap.get():
                     self.update_labels(status="calc pixelmap...")
                     nearest_neighbor_pixelmap(image, file, resolution_factor=resolution_factor)
-                if self.check_stop(): return
+                    if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
                     self.update_labels(status="calc histogram...")
-                    calc_histograms(image, file, self.set_circular_hist.get())
-                if self.check_stop(): return
+                    data = calc_histograms(image, self.set_circular_hist.get())
+                    write_csv(data, file, "CSV_files", "_histogram")
+                    if self.check_stop(): return
 
                 # radial profile
                 if self.opt_radprof.get():
                     self.update_labels(status="calc radial profile...")
-                    rad_profile_smoothed = calc_rad_profile(image, file,
+                    radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(image,
                                                             statistics=self.radio_statistics.get(),
                                                             extrapolate_max=self.set_extrapolate_max.get(),
                                                             resolution_factor=resolution_factor)
-                if self.check_stop(): return
+                    write_csv(radprof1, file, "CSV_files", "_radprof_0_raw_mean")
+                    write_csv(radprof1, file, "CSV_files", "_radprof_1_clipped")
+                    write_csv(radprof1, file, "CSV_files", "_radprof_2_cut")
+                    write_csv(radprof1, file, "CSV_files", "_radprof_3_smooth")
+                    if self.check_stop(): return
 
                 # synthetic flat
                 if self.opt_synthflat.get():
