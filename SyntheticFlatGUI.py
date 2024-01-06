@@ -751,6 +751,8 @@ class NewGUI():
             self.label_status.configure(background=rgbtohex(250, 180, 180))
         else:
             self.label_status.configure(background=rgbtohex(250, 220, 180))
+        if len(self.loaded_files) > 0:
+            self.label_files.configure(background=rgbtohex(185, 210, 255))
         self.label_bias_var.set(self.bias_value)
         self.root.update()
         return
