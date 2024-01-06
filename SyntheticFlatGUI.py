@@ -415,6 +415,19 @@ def odd_int(number):
         return int(number) + 1
 
 
+def contains(string, substrings):
+    if not isinstance(substrings, list):
+        substrings = [substrings]
+    for sub in substrings:
+        if string.lower().find(sub.lower()) >= 0:
+            return True
+    return False
+
+
+def rgbtohex(r, g, b):
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
 def apply_statistics(array, statistics):
     if statistics[:10] == 'sigma clip':
         number = statistics[10:].strip()
@@ -470,7 +483,7 @@ class NewGUI():
         self.bias_value = 0
         self.running = False
         self.asked_stop = False
-        
+
         padding = 5
 
         self.root.protocol("WM_DELETE_WINDOW",  self.on_close)
@@ -561,6 +574,7 @@ class NewGUI():
         self.label_status_var.set("ready")
         self.label_status = tk.Label(textvariable=self.label_status_var, justify='left')
         self.label_status.grid(row=2, column=2, sticky='NWSE', padx=padding, pady=padding)
+        self.update_labels()
 
         # configure
         self.root.grid_columnconfigure(0, weight=1)
@@ -731,6 +745,12 @@ class NewGUI():
         if status:
             self.label_status_var.set(status)
             print("status", status)
+        if contains(self.label_status_var.get().lower(), "ready"):
+            self.label_status.configure(background=rgbtohex(180, 230, 180))
+        elif contains(self.label_status_var.get().lower(), ["error", "interr", "stop"]):
+            self.label_status.configure(background=rgbtohex(250, 180, 180))
+        else:
+            self.label_status.configure(background=rgbtohex(250, 220, 180))
         self.label_bias_var.set(self.bias_value)
         self.root.update()
         return
