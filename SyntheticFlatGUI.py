@@ -58,16 +58,11 @@ def write_pickle(im_deb, rawshape, file):
     pickle_filename = savepath + os.sep + os.path.basename(file).split('.')[0] + ".pkl"
     pickle_filename_rawshape = savepath + os.sep + os.path.basename(file).split('.')[0] + "_rawshape.pkl"
     if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_rawshape):
-        print("write pickle file ...")
         pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
         pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
-        print("maxrad original: ", int(dist_from_center(0, 0, im_deb.shape)))
 
 
 def corr_gradient(image, resolution_factor=4):
-
-    print("correct gradient...")
-
     # measure slopes
     height, width, colors = image.shape
     slopes_x = []
@@ -105,7 +100,6 @@ def corr_gradient(image, resolution_factor=4):
 
 
 def calc_histograms(image, circular=False):
-    print("calculate histograms ...")
     for c in range(3):
 
         if circular:
@@ -175,7 +169,6 @@ def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
 
 
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
-    print("calculate radial profiles ...")
     image_width = image.shape[1]
     image_height = image.shape[0]
     maxrad = int(dist_from_center(0, 0, image.shape))
@@ -221,7 +214,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
 
     # cut edges
     if IGNORE_RADII:
-        print("cut edges ...")
         mask = rad_profile[:, 0] > IGNORE_RADII / maxrad
         rad_profile_cut = rad_profile[mask, :]
         mask = rad_profile_cut[:, 0] < 1 - IGNORE_RADII / maxrad
@@ -231,7 +223,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
 
     # cut data inside maximum
     if extrapolate_max:
-        print("cut inside max ...")
         maxind = []
         slopes = []
         for c in range(3):
@@ -251,7 +242,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
         #     rad_profile_cut[:min_maxind,c+1] = max(rad_profile_cut[:,c+1])
 
     # smooth data and interpolate
-    print("smooth data...")
     radii = np.linspace(0, 1, RADIAL_RESOLUTION)
     rad_profile_smoothed = radii
     for c in range(3):
@@ -301,11 +291,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
 
 
 def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
-    # export tif
-    print("export tif...")
-    print("grey flat: ", grey_flat)
-    print("tif size:  ", tif_size)
-    print("max value: ", max_value)
     if len(tif_size) == 3:
         # like (4024, 6024, 3)
         # save as debayered image
@@ -323,7 +308,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
 
     # match profile to output size
     maxrad_this = dist_from_center(0, 0, im_syn.shape)
-    print("maxrad synthetic: ", int(maxrad_this))
 
     # iterate image and write pixels
     for i in range(im_syn.shape[0]):
@@ -362,7 +346,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
     # convert to 16 bit
     im_syn = max_value * (2 ** 16 - 1) * im_syn / np.max(im_syn)
     im_syn = im_syn.astype(np.uint16)
-    print("16-bit maximum: ", np.max(im_syn))
 
     return im_syn
 
@@ -370,42 +353,53 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
 
 # STATIC MINOR FUNCTIONS =====================================================
 
-def debayer(array):
-    rows = array.shape[0]
-    cols = array.shape[1]
-    db_array = np.zeros((int(rows / 2), int(cols / 2), 4))
+def debayer(image, separate_green=True):
+    rows = image.shape[0]
+    cols = image.shape[1]
+    db_image = np.zeros((int(rows / 2), int(cols / 2), 4))
     for n in range(rows):
         for m in range(cols):
             if n % 2 == 0 and m % 2 == 0:  # links oben
-                db_array[int((n + 0) / 2), int((m + 0) / 2), 0] = int(array[n, m])  # R
+                db_image[int((n + 0) / 2), int((m + 0) / 2), 0] = int(image[n, m])  # R
             if n % 2 == 0 and m % 2 == 1:  # rechts oben
-                db_array[int((n + 0) / 2), int((m - 1) / 2), 1] = int(array[n, m])  # G
+                db_image[int((n + 0) / 2), int((m - 1) / 2), 1] = int(image[n, m])  # G
             if n % 2 == 1 and m % 2 == 0:  # links unten
-                db_array[int((n - 1) / 2), int((m + 0) / 2), 2] = int(array[n, m])  # G
+                db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = int(image[n, m])  # G
             if n % 2 == 1 and m % 2 == 1:  # rechts unten
-                db_array[int((n - 1) / 2), int((m - 1) / 2), 3] = int(array[n, m])  # B
-    return db_array
+                db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = int(image[n, m])  # B
+    if not separate_green:
+        db_image = merge_green(db_image)
+        print("shape", db_image.shape)
+    return db_image
 
 
-def bayer(array):
-    rows = array.shape[0]
-    cols = array.shape[1]
-    colors = array.shape[2]
-    b_array = np.zeros((rows * 2, cols * 2))
+def merge_green(image):
+    image_r = image[:, :, 0]
+    image_g = ((image[:, :, 1] + image[:, :, 2]) / 2).astype(int)
+    image_b = image[:, :, 3]
+    image = np.stack((image_r, image_g, image_b), axis=2)
+    return image
+
+
+def bayer(image):
+    rows = image.shape[0]
+    cols = image.shape[1]
+    colors = image.shape[2]
+    b_image = np.zeros((rows * 2, cols * 2))
     for i in range(rows):
         for j in range(cols):
             for c in range(colors):
                 if c == 0:  # R
-                    b_array[2 * i + 0, 2 * j + 0] = array[i, j, c]  # links oben
+                    b_image[2 * i + 0, 2 * j + 0] = image[i, j, c]  # links oben
                 elif c == 1:  # G
-                    b_array[2 * i + 1, 2 * j + 0] = array[i, j, c]  # rechts oben
+                    b_image[2 * i + 1, 2 * j + 0] = image[i, j, c]  # rechts oben
                     if colors == 3:
-                        b_array[2 * i + 0, 2 * j + 1] = array[i, j, c]  # links unten
+                        b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
                 elif c == 3:  # G
-                    b_array[2 * i + 0, 2 * j + 1] = array[i, j, c]  # links unten
+                    b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
                 else:  # B
-                    b_array[2 * i + 1, 2 * j + 1] = array[i, j, c]  # rechts unten
-    return b_array
+                    b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
+    return b_image
 
 
 def separate_axes(image):
@@ -469,11 +463,34 @@ def sigma_clip_mean(array, sigma_clip=2.0):
     result = np.mean(reduced)
     return result
 
-def write_tif_image(image, original_file, folder, suffix, already_bayered=False):
-    if not already_bayered:
-        image_write = bayer(image)
+def write_tif_image(image, original_file, folder, suffix, bayering=''):
+    if bayering == 'bayer':
+        # save input image bayered
+        if len(image.shape) >= 3:
+            # input is debayered, needs to be bayered
+            image_write = bayer(image)
+        else:
+            # input is already bayered
+            image_write = image
+    elif bayering == 'debayer':
+        print
+        # save input image debayered
+        if len(image.shape) >= 3:
+            # input is already debayered
+            if image.shape[2] == 4:
+                # greens are still separated and need to be averaged
+                image_write = merge_green(image)
+            else:
+                # use as is
+                image_write = image
+        else:
+            # input is bayered, needs to be debayered
+            image_write = debayer(image, separate_green=False)
     else:
+        # use as is
         image_write = image
+    print("write image", suffix, "input shape", image.shape)
+    print("write image", suffix, "output shape", image_write.shape)
     savepath = create_folder(original_file, folder)
     image_write = np.float32(image_write / np.max(image_write))
     cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
@@ -607,8 +624,8 @@ class NewGUI():
     def stop(self):
         print("asked_stop:", self.asked_stop, end=' ')
         self.asked_stop = True
-        self.update_labels(status="stopping...")
         print("to", self.asked_stop)
+        self.update_labels(status="stopping...")
 
     def check_stop(self):
         if self.asked_stop:
@@ -699,7 +716,7 @@ class NewGUI():
         self.set_export_corr_input.set(config_object["SETTINGS"]["set_export_corr_input"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
-        self.set_grey_flat.set(config_object["SETTINGS"]["set_debayered"]         == 'True')
+        self.set_debayered.set(config_object["SETTINGS"]["set_debayered"]         == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
         self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
@@ -762,6 +779,7 @@ class NewGUI():
             self.label_files_var.set(file)
         if status:
             self.label_status_var.set(status)
+            print("status", status)
         self.label_bias_var.set(self.bias_value)
         self.root.update()
         return
@@ -787,6 +805,12 @@ class NewGUI():
             else:
                 resolution_factor = 1
 
+            # output debayering
+            if self.set_debayered.get():
+                bayering = 'debayer'
+            else:
+                bayering = 'bayer'
+
             for file in self.loaded_files:
 
                 # set and display
@@ -808,7 +832,7 @@ class NewGUI():
                 # write original image
                 if self.set_export_corr_input.get():
                     self.update_labels(status="write original tif...")
-                    write_tif_image(image, file, "TIF_images", "_0_input")
+                    write_tif_image(image, file, "TIF_images", "_0_input", bayering=bayering)
                     if self.check_stop(): return
 
                 # gradient
@@ -820,7 +844,7 @@ class NewGUI():
                     # write gradient-corrected image
                     if self.set_export_corr_input.get():
                         self.update_labels(status="write gradcorr tif...")
-                        write_tif_image(image, file, "TIF_images", "_1_gradcorr")
+                        write_tif_image(image, file, "TIF_images", "_1_gradcorr", bayering=bayering)
                         if self.check_stop(): return
 
                 # subtract bias
@@ -849,23 +873,29 @@ class NewGUI():
                                                             extrapolate_max=self.set_extrapolate_max.get(),
                                                             resolution_factor=resolution_factor)
                     write_csv(radprof1, file, "CSV_files", "_radprof_0_raw_mean")
-                    write_csv(radprof1, file, "CSV_files", "_radprof_1_clipped")
-                    write_csv(radprof1, file, "CSV_files", "_radprof_2_cut")
-                    write_csv(radprof1, file, "CSV_files", "_radprof_3_smooth")
+                    write_csv(radprof2, file, "CSV_files", "_radprof_1_clipped")
+                    write_csv(radprof3, file, "CSV_files", "_radprof_2_cut")
+                    write_csv(radprof4, file, "CSV_files", "_radprof_3_smooth")
                     if self.check_stop(): return
 
                 # synthetic flat
                 if self.opt_synthflat.get():
-                    self.update_labels(status="calc synthetic flat...")
+
+                    # output debayering
                     if self.set_debayered.get():
-                        tif_size = (rawshape[0], rawshape[1], 3)
+                        tif_size = (rawshape[0]/2, rawshape[1]/2, 3)
                     else:
                         tif_size = (rawshape[0], rawshape[1])
+
+                    # output scaling
                     if self.set_scale_flat.get():
                         max_value = sigma_clip_mean(image) / 16384
                     else:
                         max_value = 1
-                    image_flat = calc_synthetic_flat(rad_profile_smoothed,
+
+                    # calculate synthetic flat
+                    self.update_labels(status="calc synthetic flat...")
+                    image_flat = calc_synthetic_flat(radprof4,
                                grey_flat=self.set_grey_flat.get(),
                                tif_size=tif_size,
                                max_value=max_value)
@@ -873,13 +903,17 @@ class NewGUI():
 
                     # write synthetic flat tif
                     self.update_labels(status="write synthflat tif...")
-                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat", already_bayered=True)
+                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat", bayering=bayering)
                     if self.check_stop(): return
 
                     # correct input
                     if self.set_export_corr_input.get():
                         self.update_labels(status="export flat-corrected...")
-                        write_tif_image(bayer(image) / image_flat, file, "TIF_images", "_3_flatcorr", already_bayered=True)
+                        if self.set_debayered.get():
+                            image = merge_green(image)
+                        else:
+                            image = bayer(image)
+                        write_tif_image(image / image_flat, file, "TIF_images", "_3_flatcorr", bayering=bayering)
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
@@ -888,8 +922,8 @@ class NewGUI():
             print("\nERROR!!")
             print("during status:", self.label_status_var.get())
             print("message:", e)
-            print("\n\n")
             self.update_labels(status="unknown error...")
+            raise e
             return
         finally:
             self.running = False
