@@ -4,7 +4,7 @@ import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
 import glob, os, sys, copy, numpy as np
 from configparser import ConfigParser
-import rawpy, cv2
+import rawpy, cv2, imageio
 import pickle, bz2
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
@@ -100,19 +100,19 @@ def corr_gradient(image, resolution_factor=4):
 
 
 def calc_histograms(image, circular=False):
+    image_rgb = merge_green(image)
     for c in range(3):
-
         if circular:
-            for i in range(image.shape[0]):
-                for j in range(image.shape[1]):
-                    thisdist = dist_from_center(i, j, image.shape)
-                    if thisdist > image.shape[0] / 2 or thisdist > image.shape[1] / 2:
-                        image[i, j, c] = np.nan
+            for i in range(image_rgb.shape[0]):
+                for j in range(image_rgb.shape[1]):
+                    thisdist = dist_from_center(i, j, image_rgb.shape)
+                    if thisdist > image_rgb.shape[0] / 2 or thisdist > image_rgb.shape[1] / 2:
+                        image_rgb[i, j, c] = np.nan
 
         if c == 1:
-            vals = np.append(image[:, :, 1], image[:, :, 2])
+            vals = np.append(image_rgb[:, :, 1], image_rgb[:, :, 2])
         else:
-            vals = image[:, :, c]
+            vals = image_rgb[:, :, c]
         vals = vals.flatten()
 
         # caLculate histogram
@@ -122,6 +122,7 @@ def calc_histograms(image, circular=False):
             data = bins
         data = np.column_stack((data, counts))
     return data
+
 
 def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
     rows, cols, colors = im_deb.shape
@@ -291,16 +292,9 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
 
 
 def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
-    if len(tif_size) == 3:
-        # like (4024, 6024, 3)
-        # save as debayered image
-        save_debayered = True
-        im_syn = np.zeros((int(tif_size[0]), int(tif_size[1]), 3))
-    else:
-        # (4024, 6024)
-        # save as bayer
-        save_debayered = False
-        im_syn = np.zeros((int(tif_size[0]), int(tif_size[1])))
+
+    # initialize image
+    im_syn = np.zeros((int(tif_size[0]), int(tif_size[1])))
 
     # normalize (again)
     for c in range(3):
@@ -324,21 +318,17 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
             r_index = int((RADIAL_RESOLUTION - 1) * r)
 
             # calculate brightness and set new image pixel
-            if save_debayered:
-                for c in range(3):
-                    im_syn[i, j, c] = rad_profile[r_index, c + 1]
+            if grey_flat:
+                im_syn[i, j] = rad_profile[r_index, 2]
             else:
-                if grey_flat:
-                    im_syn[i, j] = rad_profile[r_index, 2]
-                else:
-                    if i % 2 == 0 and j % 2 == 0:  # links oben
-                        im_syn[i, j] = rad_profile[r_index, 1]  # R
-                    if i % 2 == 0 and j % 2 == 1:  # rechts oben
-                        im_syn[i, j] = rad_profile[r_index, 2]  # G
-                    if i % 2 == 1 and j % 2 == 0:  # links unten
-                        im_syn[i, j] = rad_profile[r_index, 2]  # G
-                    if i % 2 == 1 and j % 2 == 1:  # rechts unten
-                        im_syn[i, j] = rad_profile[r_index, 3]  # B
+                if i % 2 == 0 and j % 2 == 0:  # links oben
+                    im_syn[i, j] = rad_profile[r_index, 1]  # R
+                if i % 2 == 0 and j % 2 == 1:  # rechts oben
+                    im_syn[i, j] = rad_profile[r_index, 2]  # G
+                if i % 2 == 1 and j % 2 == 0:  # links unten
+                    im_syn[i, j] = rad_profile[r_index, 2]  # G
+                if i % 2 == 1 and j % 2 == 1:  # rechts unten
+                    im_syn[i, j] = rad_profile[r_index, 3]  # B
 
     # final row print
     print(i)
@@ -402,24 +392,6 @@ def bayer(image):
     return b_image
 
 
-def separate_axes(image):
-    # try to find a rgb dimension
-    color_axis = None
-    for d in range(len(image.shape)):
-        if image.shape[d] < 5:
-            color_axis = d
-            break
-
-    # calc tuple of image_axes
-    image_axes = []
-    for d in range(len(image.shape)):
-        if not d == color_axis:
-            image_axes.append(d)
-    image_axes = tuple(image_axes)
-
-    return image_axes, color_axis
-
-
 def dist_from_center(i, j, shape):
     n = shape[0]
     m = shape[1]
@@ -458,42 +430,26 @@ def apply_statistics(array, statistics):
         result = np.mean(array)
     return result
 
+
 def sigma_clip_mean(array, sigma_clip=2.0):
     reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
     result = np.mean(reduced)
     return result
 
-def write_tif_image(image, original_file, folder, suffix, bayering=''):
-    if bayering == 'bayer':
-        # save input image bayered
-        if len(image.shape) >= 3:
-            # input is debayered, needs to be bayered
-            image_write = bayer(image)
-        else:
-            # input is already bayered
-            image_write = image
-    elif bayering == 'debayer':
-        print
-        # save input image debayered
-        if len(image.shape) >= 3:
-            # input is already debayered
-            if image.shape[2] == 4:
-                # greens are still separated and need to be averaged
-                image_write = merge_green(image)
-            else:
-                # use as is
-                image_write = image
-        else:
-            # input is bayered, needs to be debayered
-            image_write = debayer(image, separate_green=False)
+
+def write_tif_image(image, original_file, folder, suffix):
+    if len(image.shape) >= 3:
+        # input is debayered, needs to be bayered
+        image_write = bayer(image)
     else:
-        # use as is
+        # input is already bayered
         image_write = image
     print("write image", suffix, "input shape", image.shape)
     print("write image", suffix, "output shape", image_write.shape)
     savepath = create_folder(original_file, folder)
     image_write = np.float32(image_write / np.max(image_write))
     cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
+
 
 def write_csv(data, original_file, folder, suffix):
     savepath = create_folder(original_file, folder)
@@ -550,7 +506,6 @@ class NewGUI():
         self.set_export_corr_input = tk.BooleanVar()
         self.set_circular_hist   = tk.BooleanVar()
         self.set_grey_flat       = tk.BooleanVar()
-        self.set_debayered       = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
         self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
@@ -558,7 +513,6 @@ class NewGUI():
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
-        settings.add_checkbutton(label="Export all images debayered", onvalue=1, offvalue=0, variable=self.set_debayered)
         settings.add_checkbutton(label="Scale synthetic flat like original", onvalue=1, offvalue=0, variable=self.set_scale_flat)
         menubar.add_cascade(label="Settings", menu=settings)
 
@@ -660,7 +614,6 @@ class NewGUI():
         config_object["SETTINGS"]["set_export_corr_input"]  = str(self.set_export_corr_input.get())
         config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
-        config_object["SETTINGS"]["set_debayered"]        = str(self.set_debayered.get())
         config_object["SETTINGS"]["set_extrapolate_max"]  = str(self.set_extrapolate_max.get())
         config_object["SETTINGS"]["set_scale_flat"]       = str(self.set_scale_flat.get())
 
@@ -693,7 +646,6 @@ class NewGUI():
         config_object["SETTINGS"]["set_export_corr_input"] = 'True'
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
         config_object["SETTINGS"]["set_grey_flat"] = 'False'
-        config_object["SETTINGS"]["set_debayered"] = 'False'
         config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
         config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
@@ -716,7 +668,6 @@ class NewGUI():
         self.set_export_corr_input.set(config_object["SETTINGS"]["set_export_corr_input"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
-        self.set_debayered.set(config_object["SETTINGS"]["set_debayered"]         == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
         self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
@@ -805,12 +756,6 @@ class NewGUI():
             else:
                 resolution_factor = 1
 
-            # output debayering
-            if self.set_debayered.get():
-                bayering = 'debayer'
-            else:
-                bayering = 'bayer'
-
             for file in self.loaded_files:
 
                 # set and display
@@ -832,7 +777,7 @@ class NewGUI():
                 # write original image
                 if self.set_export_corr_input.get():
                     self.update_labels(status="write original tif...")
-                    write_tif_image(image, file, "TIF_images", "_0_input", bayering=bayering)
+                    write_tif_image(image, file, "TIF_images", "_0_input")
                     if self.check_stop(): return
 
                 # gradient
@@ -844,7 +789,7 @@ class NewGUI():
                     # write gradient-corrected image
                     if self.set_export_corr_input.get():
                         self.update_labels(status="write gradcorr tif...")
-                        write_tif_image(image, file, "TIF_images", "_1_gradcorr", bayering=bayering)
+                        write_tif_image(image, file, "TIF_images", "_1_gradcorr")
                         if self.check_stop(): return
 
                 # subtract bias
@@ -881,12 +826,6 @@ class NewGUI():
                 # synthetic flat
                 if self.opt_synthflat.get():
 
-                    # output debayering
-                    if self.set_debayered.get():
-                        tif_size = (rawshape[0]/2, rawshape[1]/2, 3)
-                    else:
-                        tif_size = (rawshape[0], rawshape[1])
-
                     # output scaling
                     if self.set_scale_flat.get():
                         max_value = sigma_clip_mean(image) / 16384
@@ -897,23 +836,20 @@ class NewGUI():
                     self.update_labels(status="calc synthetic flat...")
                     image_flat = calc_synthetic_flat(radprof4,
                                grey_flat=self.set_grey_flat.get(),
-                               tif_size=tif_size,
+                               tif_size=(rawshape[0], rawshape[1]),
                                max_value=max_value)
                     if self.check_stop(): return
 
                     # write synthetic flat tif
                     self.update_labels(status="write synthflat tif...")
-                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat", bayering=bayering)
+                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat")
                     if self.check_stop(): return
 
                     # correct input
                     if self.set_export_corr_input.get():
                         self.update_labels(status="export flat-corrected...")
-                        if self.set_debayered.get():
-                            image = merge_green(image)
-                        else:
-                            image = bayer(image)
-                        write_tif_image(image / image_flat, file, "TIF_images", "_3_flatcorr", bayering=bayering)
+                        image = bayer(image)
+                        write_tif_image(image / image_flat, file, "TIF_images", "_3_flatcorr")
 
                 self.update_labels(status="finished.")
                 print("Finished file.")
@@ -933,4 +869,5 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
+
 
