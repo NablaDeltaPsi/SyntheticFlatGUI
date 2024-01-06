@@ -370,26 +370,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
 
 # STATIC MINOR FUNCTIONS =====================================================
 
-def channel(index):
-    if index == 0:
-        return 'B'
-    if index == 1:
-        return 'G'
-    if index == 2:
-        return 'R'
-
-
-def mindist(array_):
-    array = list(set(array_[:1000000]))[:100]
-    array.sort()
-    mindist = max(array)
-    for i in range(1, len(array)):
-        thisdist = array[i] - array[i - 1]
-        if thisdist > 0 and thisdist < mindist:
-            mindist = thisdist
-    return mindist
-
-
 def debayer(array):
     rows = array.shape[0]
     cols = array.shape[1]
@@ -446,31 +426,6 @@ def separate_axes(image):
     return image_axes, color_axis
 
 
-def resize(array, factor):
-    image_axes, color_axis = separate_axes(array)
-    if color_axis:
-        new_array = np.zeros((
-            int(array.shape[image_axes[0]] / factor) + 1,
-            int(array.shape[image_axes[1]] / factor) + 1,
-            array.shape[color_axis]
-        ))
-    else:
-        new_array = np.zeros((
-            int(array.shape[image_axes[0]] / factor) + 1,
-            int(array.shape[image_axes[1]] / factor) + 1
-        ))
-    for n in range(array.shape[image_axes[0]]):
-        if n % factor == 0:
-            for m in range(array.shape[image_axes[1]]):
-                if m % factor == 0:
-                    if color_axis:
-                        for c in range(array.shape[color_axis]):
-                            new_array[int(n / factor), int(m / factor), c] = array[n, m, c]
-                    else:
-                        new_array[int(n / factor), int(m / factor)] = array[n, m]
-    return new_array
-
-
 def dist_from_center(i, j, shape):
     n = shape[0]
     m = shape[1]
@@ -487,56 +442,12 @@ def create_folder(file, folder_name):
     return savepath
 
 
-def calc_quadrant_med(image, color_index=0, relative=False):
-    image_axes, color_axis = separate_axes(image)
-    if color_axis:
-        image = image.take(indices=color_index, axis=color_axis)
-    height_half = int(image.shape[0] / 2)
-    width_half = int(image.shape[1] / 2)
-    quadrant_1 = image[:height_half, :width_half]
-    quadrant_2 = image[:height_half, width_half:]
-    quadrant_3 = image[height_half:, :width_half]
-    quadrant_4 = image[height_half:, width_half:]
-    if relative:
-        norm = np.median(image) / 100
-    else:
-        norm = 1
-    quadrant_med = []
-    quadrant_med.append(np.median(quadrant_1) / norm)
-    quadrant_med.append(np.median(quadrant_2) / norm)
-    quadrant_med.append(np.median(quadrant_3) / norm)
-    quadrant_med.append(np.median(quadrant_4) / norm)
-    return quadrant_med
-
-
-def clip(number):
-    if number < 0:
-        return 0
-    elif number > 1:
-        return 1
-    else:
-        return number
-
 def odd_int(number):
     if int(number) % 2 == 1:
         return int(number)
     else:
         return int(number) + 1
 
-def get_closest(val, list):
-    # list must be sorted!
-    closest = np.inf
-    closest_ind = 0
-    start = int(clip(val - 0.05) * len(list))
-    stop = int(clip(val + 0.05) * len(list))
-    for i in range(start, stop):
-        if abs(list[i] - val) < closest:
-            closest = abs(list[i] - val)
-            closest_ind = i
-        else:
-            # larger for the first time
-            break
-    return closest_ind
 
 def apply_statistics(array, statistics):
     if statistics[:10] == 'sigma clip':
@@ -572,6 +483,10 @@ def write_csv(data, original_file, folder, suffix):
     fmt = '%.5f', '%d', '%d', '%d'
     np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
                data, delimiter=",", fmt=fmt)
+
+
+
+# TKINTER CLASS =====================================================
 
 class NewGUI():
     def __init__(self):
@@ -622,9 +537,9 @@ class NewGUI():
         self.set_extrapolate_max = tk.BooleanVar()
         self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
-        settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
+        settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
         settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
         settings.add_checkbutton(label="Export all images debayered", onvalue=1, offvalue=0, variable=self.set_debayered)
         settings.add_checkbutton(label="Scale synthetic flat like original", onvalue=1, offvalue=0, variable=self.set_scale_flat)
