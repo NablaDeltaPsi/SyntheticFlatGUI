@@ -402,41 +402,12 @@ def dist_from_center(i, j, height, width):
     dx = int(abs(i - height / 2))
     dy = int(abs(j - width / 2))
     dx, dy = sorted([dx, dy])  # sort helps caching of symmetric function
-    gcd = math.gcd(dx, dy)    # 55 sek, 2.454.407 misses
-    #gcd = own_gcd(dx, dy)     # 61 sek, 3.955.017 misses
-    #gcd = simple_gcd(dx, dy)  # 48 sek, 4.038.080 misses
-    #gcd = 0                   # 42 sek, 4.040.091 misses
-    if gcd > 0:
-        dx = int(dx / gcd)
-        dy = int(dy / gcd)
-    else:
-        gcd = 1
-    return cached_dist(dx, dy) * gcd
+    return cached_dist(dx, dy)
 
 
 @lru_cache(maxsize=None)
 def cached_dist(dx, dy):
     return math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
-
-
-def own_gcd(a, b, thisdepth=0, maxdepth=3):
-    if b == 0:
-        return a
-    if thisdepth == maxdepth:
-        return 0
-    else:
-        return own_gcd(b, a % b, thisdepth=thisdepth + 1, maxdepth=maxdepth)
-
-
-def simple_gcd(a, b):
-    # a must be larger than b
-    if a == 0 or b == 0:
-        gcd = 0
-    elif a % b == 0:
-        gcd = b
-    else:
-        gcd = 0
-    return gcd
 
 
 def create_folder(file, folder_name):
