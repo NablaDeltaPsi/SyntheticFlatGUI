@@ -2,7 +2,7 @@ import tkinter as tk
 import tkinter.font
 import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
-import glob, os, sys, copy, numpy as np
+import glob, os, sys, copy, numpy as np, math
 from configparser import ConfigParser
 import rawpy, cv2, imageio
 import pickle, bz2
@@ -12,6 +12,8 @@ from scipy.signal import savgol_filter
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import threading
+from functools import lru_cache
+import datetime as dt
 
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.2'
@@ -101,11 +103,13 @@ def corr_gradient(image, resolution_factor=4):
 
 def calc_histograms(image, circular=False):
     image_rgb = merge_green(image)
+    height = image_rgb.shape[0]
+    width = image_rgb.shape[1]
     for c in range(3):
         if circular:
             for i in range(image_rgb.shape[0]):
                 for j in range(image_rgb.shape[1]):
-                    thisdist = dist_from_center(i, j, image_rgb.shape)
+                    thisdist = dist_from_center(i, j, height, width)
                     if thisdist > image_rgb.shape[0] / 2 or thisdist > image_rgb.shape[1] / 2:
                         image_rgb[i, j, c] = np.nan
 
@@ -172,13 +176,13 @@ def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
     image_width = image.shape[1]
     image_height = image.shape[0]
-    maxrad = int(dist_from_center(0, 0, image.shape))
+    maxrad = int(dist_from_center(0, 0, image_width, image_height))
     radii = []
     rad_counts = {}
     rad_pixels = {}
     for i in range(image_height):
         for j in range(image_width):
-            rad = int(dist_from_center(i, j, image.shape))
+            rad = int(dist_from_center(i, j, image_width, image_height))
             if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0 and image[i, j, 3] > 0):
                 continue
             if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
@@ -293,26 +297,27 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
 
 def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
 
+    # measure time
+    start = dt.datetime.now()
+
     # initialize image
-    im_syn = np.zeros((int(tif_size[0]), int(tif_size[1])))
+    height = tif_size[0]
+    width = tif_size[1]
+    im_syn = np.zeros((int(height), int(width)))
 
     # normalize (again)
     for c in range(3):
         rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
 
     # match profile to output size
-    maxrad_this = dist_from_center(0, 0, im_syn.shape)
+    maxrad_this = dist_from_center(0, 0, height, width)
 
     # iterate image and write pixels
     for i in range(im_syn.shape[0]):
-        if not i == 0 and i % int(im_syn.shape[0] / 10) == 0:
-            print(i, end=" >> ")
-        if not i == 0 and i % int(im_syn.shape[0] / 2) == 0:
-            print("")
         for j in range(im_syn.shape[1]):
 
             # radial position of pixel
-            r = dist_from_center(i, j, im_syn.shape) / maxrad_this
+            r = dist_from_center(i, j, height, width) / maxrad_this
 
             # search match within small range in radial profile
             r_index = int((RADIAL_RESOLUTION - 1) * r)
@@ -330,12 +335,13 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
                 if i % 2 == 1 and j % 2 == 1:  # rechts unten
                     im_syn[i, j] = rad_profile[r_index, 3]  # B
 
-    # final row print
-    print(i)
-
     # convert to 16 bit
     im_syn = max_value * (2 ** 16 - 1) * im_syn / np.max(im_syn)
     im_syn = im_syn.astype(np.uint16)
+
+    # print execution time
+    stop = dt.datetime.now()
+    print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
 
     return im_syn
 
@@ -392,11 +398,16 @@ def bayer(image):
     return b_image
 
 
-def dist_from_center(i, j, shape):
-    n = shape[0]
-    m = shape[1]
-    rad = np.sqrt((i - n / 2) ** 2 + (j - m / 2) ** 2)
-    return rad
+def dist_from_center(i, j, height, width):
+    dx = int(abs(i - height / 2))
+    dy = int(abs(j - width / 2))
+    dx, dy = sorted([dx, dy])  # sort helps caching of symmetric function
+    return cached_dist(dx, dy)
+
+
+@lru_cache(maxsize=None)
+def cached_dist(dx, dy):
+    return math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
 
 
 def create_folder(file, folder_name):
@@ -466,7 +477,7 @@ def write_tif_image(image, original_file, folder, suffix):
 
 def write_csv(data, original_file, folder, suffix):
     savepath = create_folder(original_file, folder)
-    fmt = '%.5f', '%d', '%d', '%d'
+    fmt = '%.5f', '%.5f', '%.5f', '%.5f'
     np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
                data, delimiter=",", fmt=fmt)
 
@@ -664,6 +675,7 @@ class NewGUI():
         config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
         self.apply_config(config_object)
+        self.update_labels(status="ready")
 
     def apply_config(self, config_object):
         self.root.geometry(config_object["BASICS"]["window size"])
@@ -724,7 +736,7 @@ class NewGUI():
         user_input = tk.simpledialog.askinteger(title="Bias value", prompt="Which bias value should be subtracted from the image?")
         self.bias_value = int(user_input)
         self.label_bias_var.set(self.bias_value)
-        self.root.update()
+        self.update_labels()
         return
 
     def ask_bias_file(self):
@@ -745,14 +757,18 @@ class NewGUI():
         if status:
             self.label_status_var.set(status)
             print("status", status)
-        if contains(self.label_status_var.get().lower(), "ready"):
+        if contains(self.label_status_var.get().lower(), ["ready", "finish"]):
             self.label_status.configure(background=rgbtohex(180, 230, 180))
-        elif contains(self.label_status_var.get().lower(), ["error", "interr", "stop"]):
+        elif contains(self.label_status_var.get().lower(), ["error", "interr", "stop", "no file"]):
             self.label_status.configure(background=rgbtohex(250, 180, 180))
         else:
             self.label_status.configure(background=rgbtohex(250, 220, 180))
         if len(self.loaded_files) > 0:
-            self.label_files.configure(background=rgbtohex(185, 210, 255))
+            self.label_files.configure(background=rgbtohex(210, 230, 255))
+        else:
+            self.label_files.configure(background=rgbtohex(250, 180, 180))
+        if self.bias_value > 0:
+            self.label_bias.configure(background=rgbtohex(210, 230, 255))
         self.label_bias_var.set(self.bias_value)
         self.root.update()
         return
@@ -763,6 +779,7 @@ class NewGUI():
         else:
             self.running = True
             self.update_labels(status="running...")
+        self.asked_stop = False
         try:
             counter = 0
 
@@ -874,6 +891,8 @@ class NewGUI():
                         write_tif_image(image / image_flat, file, "TIF_images", "_3_flatcorr")
 
                 self.update_labels(status="finished.")
+                print("cached_dist:", cached_dist.cache_info())
+                cached_dist.cache_clear()
                 print("Finished file.")
 
         except Exception as e:
@@ -891,5 +910,6 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
+    #print(own_gcd(40, 60))
 
 
