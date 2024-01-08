@@ -4,7 +4,7 @@ import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
 import glob, os, sys, copy, numpy as np, math
 from configparser import ConfigParser
-import rawpy, cv2, imageio
+import rawpy, cv2
 import pickle, bz2
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
@@ -174,15 +174,20 @@ def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
 
 
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
-    image_width = image.shape[1]
+
+    # measure time
+    start = dt.datetime.now()
+
+    # acquire pixel values
     image_height = image.shape[0]
-    maxrad = int(dist_from_center(0, 0, image_width, image_height))
+    image_width = image.shape[1]
+    maxrad = int(dist_from_center(0, 0, image_height, image_width))
     radii = []
     rad_counts = {}
     rad_pixels = {}
     for i in range(image_height):
         for j in range(image_width):
-            rad = int(dist_from_center(i, j, image_width, image_height))
+            rad = int(dist_from_center(i, j, image_height, image_width))
             if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0 and image[i, j, 3] > 0):
                 continue
             if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
@@ -255,6 +260,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
         y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2,
                                            mode='interp')
 
+        # extrapolate inside cut max value
         if extrapolate_max:
             # add central value for interpolation
             x_new = list(rad_profile_cut[:, 0].flatten())
@@ -276,12 +282,12 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
         else:
             x_new = rad_profile_cut[:, 0]
 
-        # y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0]/5), polyorder=2, mode='interp')
-
+        # interpolate onto continuous values
         f = interp1d(x_new, y_new, kind='quadratic', fill_value='extrapolate')
         y_new = f(radii)
         rad_profile_smoothed = np.column_stack((rad_profile_smoothed, y_new))
 
+    # print extrapolation info
     if extrapolate_max:
         print("extrapolated with slopes: ", slopes)
 
@@ -292,6 +298,13 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
         rad_profile_cut[:, c + 1] = rad_profile_cut[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
         rad_profile_smoothed[:, c + 1] = rad_profile_smoothed[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
 
+    # print minimum value
+    print("minimum:", np.min(rad_profile_smoothed[:, 1:]))
+
+    # print execution time
+    stop = dt.datetime.now()
+    print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
+
     return rad_profile_raw_mean, rad_profile, rad_profile_cut, rad_profile_smoothed
 
 
@@ -301,8 +314,9 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
     start = dt.datetime.now()
 
     # initialize image
-    height = tif_size[0]
-    width = tif_size[1]
+    height, width = sorted(tif_size)
+    halfheight = int(height / 2)
+    halfwidth = int(width / 2)
     im_syn = np.zeros((int(height), int(width)))
 
     # normalize (again)
@@ -313,8 +327,21 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
     maxrad_this = dist_from_center(0, 0, height, width)
 
     # iterate image and write pixels
-    for i in range(im_syn.shape[0]):
-        for j in range(im_syn.shape[1]):
+    for di in range(halfheight):
+        for dj in range(halfwidth):
+
+            # absolute pixel indices
+            i = halfheight + di
+            j = halfwidth + dj
+
+            # halfheight and halfwidth are pixel references
+            # but the true center is in between pixels
+            halfheight_ = halfheight - 0.5
+            halfwidth_  = halfwidth  - 0.5
+
+            # check already written
+            if not im_syn[i, j] == 0:
+                continue
 
             # radial position of pixel
             r = dist_from_center(i, j, height, width) / maxrad_this
@@ -322,21 +349,25 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
             # search match within small range in radial profile
             r_index = int((RADIAL_RESOLUTION - 1) * r)
 
-            # calculate brightness and set new image pixel
-            if grey_flat:
-                im_syn[i, j] = rad_profile[r_index, 2]
-            else:
-                if i % 2 == 0 and j % 2 == 0:  # links oben
-                    im_syn[i, j] = rad_profile[r_index, 1]  # R
-                if i % 2 == 0 and j % 2 == 1:  # rechts oben
-                    im_syn[i, j] = rad_profile[r_index, 2]  # G
-                if i % 2 == 1 and j % 2 == 0:  # links unten
-                    im_syn[i, j] = rad_profile[r_index, 2]  # G
-                if i % 2 == 1 and j % 2 == 1:  # rechts unten
-                    im_syn[i, j] = rad_profile[r_index, 3]  # B
+            # write pixel brightness in all quadrants
+            # since the radii of the multiples are already known, use them here (r_index * k)
+            # write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j)
+            for k in range(1, halfheight):
+                if di * k < halfheight_ and dj * k < halfwidth_:
+                    di_ = di * k + 0.5
+                    dj_ = dj * k + 0.5
+                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ + dj_)
+                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ - dj_)
+                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ - di_, halfwidth_ + dj_)
+                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ - di_, halfwidth_ - dj_)
+                else:
+                    break
 
     # convert to 16 bit
-    im_syn = max_value * (2 ** 16 - 1) * im_syn / np.max(im_syn)
+    im_syn = im_syn / np.max(im_syn)
+    print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
+    print("minimum:  ", np.min(im_syn[im_syn > 0]))
+    im_syn = max_value * (2 ** 16 - 1) * im_syn
     im_syn = im_syn.astype(np.uint16)
 
     # print execution time
@@ -348,6 +379,23 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
 
 
 # STATIC MINOR FUNCTIONS =====================================================
+
+def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
+    i = int(i)
+    j = int(j)
+    # calculate brightness and set new image pixel
+    if grey_flat:
+        im_syn[i, j] = rad_profile[r_index, 2]
+    else:
+        if i % 2 == 0 and j % 2 == 0:  # links oben
+            im_syn[i, j] = rad_profile[r_index, 1]  # R
+        if i % 2 == 0 and j % 2 == 1:  # rechts oben
+            im_syn[i, j] = rad_profile[r_index, 2]  # G
+        if i % 2 == 1 and j % 2 == 0:  # links unten
+            im_syn[i, j] = rad_profile[r_index, 2]  # G
+        if i % 2 == 1 and j % 2 == 1:  # rechts unten
+            im_syn[i, j] = rad_profile[r_index, 3]  # B
+
 
 def debayer(image, separate_green=True):
     rows = image.shape[0]
@@ -803,7 +851,7 @@ class NewGUI():
 
                 # load
                 #print(dt.datetime.now())
-                self.update_labels(status="load and debayer...")
+                self.update_labels(status="load...")
                 image, rawshape = load_image(file)
                 if self.check_stop(): return
 
