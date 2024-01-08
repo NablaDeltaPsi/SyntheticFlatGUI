@@ -2,7 +2,7 @@ Python-GUI zum Erstellen von synthetischen Flats und weiterer Rohbild-Analysen
 
 Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Programm verfügbar. Zum Starten nach Herunterladen und Entzippen "SyntheticFlatGUI.exe" ausführen.
 
-![SyntheticFlatGUI](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/183a62cc-bcb2-4297-97c6-7e549e74389b)
+![Screenshot](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/f138f669-73ae-4b69-bc9a-dffc9011be7a)
 
 ### Einleitung
  
