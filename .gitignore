@@ -5,6 +5,7 @@ build/
 dist/
 scipy/
 .idea/
+__pycache__/
 *.arw
 *.csv
 *.txt

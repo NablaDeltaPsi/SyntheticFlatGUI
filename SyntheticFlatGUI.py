@@ -184,7 +184,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     maxrad = int(dist_from_center(0, 0, image_height, image_width))
     radii = []
     rad_counts = {}
-    rad_pixels = {}
     for i in range(image_height):
         for j in range(image_width):
             rad = int(dist_from_center(i, j, image_height, image_width))
@@ -197,7 +196,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
             if not rad in radii:
                 radii.append(rad)
                 rad_counts[rad] = [[], [], []]
-                rad_pixels[rad] = [[], [], []]
             rad_counts[rad][0].append(image[i, j, 0])
             rad_counts[rad][1].append(image[i, j, 1])
             rad_counts[rad][1].append(image[i, j, 2])
@@ -234,7 +232,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # cut data inside maximum
     if extrapolate_max:
         maxind = []
-        slopes = []
         for c in range(3):
             this_filtered = rad_profile_cut[:, c + 1]
             this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 10),
@@ -254,33 +251,41 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # smooth data and interpolate
     radii = np.linspace(0, 1, RADIAL_RESOLUTION)
     rad_profile_smoothed = radii
+    slopes_inner = []
+    slopes_outer = []
     for c in range(3):
-        y_new = savgol_filter(rad_profile_cut[:, c + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10),
-                                           polyorder=2, mode='interp')
-        y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2,
-                                           mode='interp')
+        y_new = savgol_filter(rad_profile_cut[:, c + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10), polyorder=2, mode='interp')
+        y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2, mode='interp')
 
-        # extrapolate inside cut max value
-        if extrapolate_max:
-            # add central value for interpolation
-            x_new = list(rad_profile_cut[:, 0].flatten())
-            y_new = list(y_new.flatten())
-            xdist = x_new[1] - x_new[0]
-            ylast = y_new[0]
-            xlast = x_new[0]
-            slope = (y_new[1] - y_new[0]) / xdist
-            # slope = np.mean(np.diff(y_new[:int(len(y_new)/10)])) / xdist
-            if slope > 0:
-                slope = 0
-            slopes.append(int(slope))
-            xadd = np.arange(0, xlast * 0.999, xdist)
-            # quadratic function with given value and slope at xlast and zero derivative at x=0
-            yadd = ylast + slope / 2 * (xadd ** 2 / xlast - xlast)
-            # print(np.diff(yadd) / xdist) # derivative for troubleshooting
-            x_new = list(xadd) + x_new
-            y_new = list(yadd) + y_new
-        else:
-            x_new = rad_profile_cut[:, 0]
+        # extrapolate inner
+        x_new = list(rad_profile_cut[:, 0].flatten())
+        y_new = list(y_new.flatten())
+        xdist = x_new[1] - x_new[0]
+        ylast = y_new[0]
+        xlast = x_new[0]
+        slope = (y_new[1] - y_new[0]) / xdist
+        if slope > 0:
+            slope = 0
+        slopes_inner.append(int(slope))
+        xadd = np.arange(0, xlast - xdist, xdist)
+        # quadratic function with given value and slope at xlast and zero derivative at x=0
+        yadd = ylast + slope / 2 * (xadd ** 2 / xlast - xlast)
+        x_new = list(xadd) + x_new
+        y_new = list(yadd) + y_new
+
+        # extrapolate outer
+        x_new = x_new[:-4]  # whatever reason, otherwise step in profile
+        y_new = y_new[:-4]  # whatever reason, otherwise step in profile
+        xdist = x_new[-1] - x_new[-2]
+        ylast = y_new[-1]
+        xlast = x_new[-1]
+        slope = (y_new[-1] - y_new[-2]) / xdist
+        slopes_outer.append(int(slope))
+        xadd = np.arange(xlast + xdist, 1, xdist)
+        # linear function
+        yadd = ylast + slope * (xadd - xlast)
+        x_new = x_new + list(xadd)
+        y_new = y_new + list(yadd)
 
         # interpolate onto continuous values
         f = interp1d(x_new, y_new, kind='quadratic', fill_value='extrapolate')
@@ -288,8 +293,8 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
         rad_profile_smoothed = np.column_stack((rad_profile_smoothed, y_new))
 
     # print extrapolation info
-    if extrapolate_max:
-        print("extrapolated with slopes: ", slopes)
+    print("extrapolated with inner slopes: ", slopes_inner)
+    print("extrapolated with outer slopes: ", slopes_outer)
 
     # normalize by smoothed curve
     for c in range(3):
@@ -525,7 +530,7 @@ def write_tif_image(image, original_file, folder, suffix):
 
 def write_csv(data, original_file, folder, suffix):
     savepath = create_folder(original_file, folder)
-    fmt = '%.5f', '%.5f', '%.5f', '%.5f'
+    fmt = '%.10f', '%.10f', '%.10f', '%.10f'
     np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
                data, delimiter=",", fmt=fmt)
 
@@ -718,7 +723,7 @@ class NewGUI():
         config_object["SETTINGS"]["set_write_pickle"] = 'True'
         config_object["SETTINGS"]["set_export_corr_input"] = 'True'
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
-        config_object["SETTINGS"]["set_grey_flat"] = 'False'
+        config_object["SETTINGS"]["set_grey_flat"] = 'True'
         config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
         config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
