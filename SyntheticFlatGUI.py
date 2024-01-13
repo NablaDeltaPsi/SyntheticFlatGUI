@@ -16,7 +16,7 @@ from functools import lru_cache
 import datetime as dt
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.2'
+VERSION = '1.3'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -268,7 +268,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     return rad_profile_raw_mean, rad_profile, rad_profile_cut, rad_profile_smoothed
 
 
-def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max_value=1):
+def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
 
     # measure time
     start = dt.datetime.now()
@@ -327,7 +327,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024), max
     im_syn = im_syn / np.max(im_syn)
     print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
     print("minimum:  ", np.min(im_syn[im_syn > 0]))
-    im_syn = max_value * (2 ** 16 - 1) * im_syn
+    im_syn = (2 ** 16 - 1) * im_syn
     im_syn = im_syn.astype(np.uint16)
 
     # print execution time
@@ -537,13 +537,11 @@ class NewGUI():
         self.set_circular_hist   = tk.BooleanVar()
         self.set_grey_flat       = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
-        self.set_scale_flat      = tk.BooleanVar()
         settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
-        settings.add_checkbutton(label="Export synthetic flat as grey", onvalue=1, offvalue=0, variable=self.set_grey_flat)
-        settings.add_checkbutton(label="Scale synthetic flat like original", onvalue=1, offvalue=0, variable=self.set_scale_flat)
+        settings.add_checkbutton(label="Grey synthetic flat", onvalue=1, offvalue=0, variable=self.set_grey_flat)
         menubar.add_cascade(label="Settings", menu=settings)
 
         # statistics
@@ -645,7 +643,6 @@ class NewGUI():
         config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
         config_object["SETTINGS"]["set_extrapolate_max"]  = str(self.set_extrapolate_max.get())
-        config_object["SETTINGS"]["set_scale_flat"]       = str(self.set_scale_flat.get())
 
         with open(GUINAME + ".conf", 'w') as conf:
             config_object.write(conf)
@@ -676,7 +673,6 @@ class NewGUI():
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
         config_object["SETTINGS"]["set_grey_flat"] = 'True'
         config_object["SETTINGS"]["set_extrapolate_max"] = 'True'
-        config_object["SETTINGS"]["set_scale_flat"] = 'False'
 
         self.apply_config(config_object)
         self.update_labels(status="ready")
@@ -698,7 +694,6 @@ class NewGUI():
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
         self.set_extrapolate_max.set(config_object["SETTINGS"]["set_extrapolate_max"] == 'True')
-        self.set_scale_flat.set(config_object["SETTINGS"]["set_scale_flat"]       == 'True')
 
         self.update_labels()
 
@@ -862,18 +857,11 @@ class NewGUI():
                 # synthetic flat
                 if self.opt_synthflat.get():
 
-                    # output scaling
-                    if self.set_scale_flat.get():
-                        max_value = sigma_clip_mean(image) / 16384
-                    else:
-                        max_value = 1
-
                     # calculate synthetic flat
                     self.update_labels(status="calc synthetic flat...")
                     image_flat = calc_synthetic_flat(radprof4,
                                grey_flat=self.set_grey_flat.get(),
-                               tif_size=(rawshape[0], rawshape[1]),
-                               max_value=max_value)
+                               tif_size=(rawshape[0], rawshape[1]))
                     if self.check_stop(): return
 
                     # write synthetic flat tif
