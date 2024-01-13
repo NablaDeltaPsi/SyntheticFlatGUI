@@ -128,51 +128,6 @@ def calc_histograms(image, circular=False):
     return data
 
 
-def nearest_neighbor_pixelmap(im_deb, file, resolution_factor=4):
-    rows, cols, colors = im_deb.shape
-    flat_pixel_values = []
-    flat_maxneighbors = []
-    for c in range(colors):
-        maxneighbors = np.zeros((rows, cols))
-        for n in range(rows):
-            if n % 500 == 0:
-                print("color: ", c, ", row: ", n)
-            if n % resolution_factor == 0:
-                continue
-            for m in range(cols):
-                if m % resolution_factor == 0:
-                    continue
-                neighbors = []
-                for nd in [-1, 0, 1]:
-                    for md in [-1, 0, 1]:
-                        if not (nd == 0 and md == 0):
-                            try:
-                                neighbors.append(im_deb[n + nd, m + md, c])
-                            except:
-                                pass
-                maxneighbors[n, m] = max(neighbors)
-        flat_pixel_values += list(im_deb[:,:,c].flatten())
-        flat_maxneighbors += list(maxneighbors.flatten())
-
-    fig = plt.figure(figsize=(7, 5))
-    plt.rcParams['font.size'] = 14
-    plt.hist2d(flat_pixel_values, flat_maxneighbors, bins=300, range=[[0, 2000], [0, 2000]], norm=mpl.colors.LogNorm(), cmap=plt.cm.jet)
-    # plt.xticks(range(100,20000,200))
-    # plt.yticks(range(100,20000,200))
-    plt.xticks([])
-    plt.yticks([])
-    plt.xlim([0, 2000])
-    plt.ylim([0, 2000])
-    plt.xlabel('Pixel value')
-    plt.ylabel('Max of 8 neighbors')
-    plt.colorbar()
-    plt.gca().set_aspect('equal')
-    fig.tight_layout()
-    savepath = create_folder(file, "Nearest_neighbor_pixelmap")
-    plt.savefig(savepath + os.sep + os.path.basename(file).split(".")[0] + '_pixelmap.png', dpi=300)
-    plt.show()
-
-
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
 
     # measure time
@@ -566,12 +521,10 @@ class NewGUI():
         # mainoptions
         options = tk.Menu(menubar, tearoff=0)
         self.opt_gradient  = tk.BooleanVar()
-        self.opt_pixelmap  = tk.BooleanVar()
         self.opt_histogram = tk.BooleanVar()
         self.opt_radprof   = tk.BooleanVar()
         self.opt_synthflat = tk.BooleanVar()
         options.add_checkbutton(label="Correct gradient", onvalue=1, offvalue=0, variable=self.opt_gradient)
-        options.add_checkbutton(label="Nearest neighbor pixelmap", onvalue=1, offvalue=0, variable=self.opt_pixelmap)
         options.add_checkbutton(label="Calculate histogram", onvalue=1, offvalue=0, variable=self.opt_histogram)
         options.add_checkbutton(label="Calculate radial profile", onvalue=1, offvalue=0, variable=self.opt_radprof, command=self.toggle_radprof)
         options.add_checkbutton(label="Export synthetic flat", onvalue=1, offvalue=0, variable=self.opt_synthflat, command=self.toggle_synthflat)
@@ -682,7 +635,6 @@ class NewGUI():
 
         config_object["OPTIONS"] = {}
         config_object["OPTIONS"]["opt_gradient"]  = str(self.opt_gradient.get())
-        config_object["OPTIONS"]["opt_pixelmap"]  = str(self.opt_pixelmap.get())
         config_object["OPTIONS"]["opt_histogram"] = str(self.opt_histogram.get())
         config_object["OPTIONS"]["opt_radprof"]   = str(self.opt_radprof.get())
         config_object["OPTIONS"]["opt_synthflat"] = str(self.opt_synthflat.get())
@@ -714,7 +666,6 @@ class NewGUI():
 
         config_object["OPTIONS"] = {}
         config_object["OPTIONS"]["opt_gradient"] = 'True'
-        config_object["OPTIONS"]["opt_pixelmap"] = 'False'
         config_object["OPTIONS"]["opt_histogram"] = 'False'
         config_object["OPTIONS"]["opt_radprof"] = 'True'
         config_object["OPTIONS"]["opt_synthflat"] = 'True'
@@ -738,7 +689,6 @@ class NewGUI():
         self.bias_value = int(config_object["BASICS"]["bias_value"])
 
         self.opt_gradient.set(config_object["OPTIONS"]["opt_gradient"]   == 'True')
-        self.opt_pixelmap.set(config_object["OPTIONS"]["opt_pixelmap"]   == 'True')
         self.opt_histogram.set(config_object["OPTIONS"]["opt_histogram"] == 'True')
         self.opt_radprof.set(config_object["OPTIONS"]["opt_radprof"]     == 'True')
         self.opt_synthflat.set(config_object["OPTIONS"]["opt_synthflat"] == 'True')
@@ -888,12 +838,6 @@ class NewGUI():
                 self.update_labels(status="subtract bias...")
                 image = image - self.bias_value
                 if self.check_stop(): return
-
-                # pixelmap
-                if self.opt_pixelmap.get():
-                    self.update_labels(status="calc pixelmap...")
-                    nearest_neighbor_pixelmap(image, file, resolution_factor=resolution_factor)
-                    if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
