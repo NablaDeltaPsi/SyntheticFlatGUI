@@ -2,7 +2,7 @@ Python-GUI zum Erstellen von synthetischen Flats und weiterer Rohbild-Analysen
 
 Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Programm verfügbar. Zum Starten nach Herunterladen und Entzippen "SyntheticFlatGUI.exe" ausführen.
 
-![Screenshot](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/f138f669-73ae-4b69-bc9a-dffc9011be7a)
+![GUI](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/5e4e80e8-ed4e-4cdc-9324-f7c86681f52a)
 
 ### Einleitung
  
@@ -40,11 +40,9 @@ Anwenden der Funktionen unter "Options"
 ### Options
 Ein/Aus Schalter der Hauptfunktionen
 - Correct gradient  
-Ein Gradient im Bild muss vor der Erstellung eines Flats korrigiert werden.
-- Nearest neighbor pixelmap  
-Diagramm zum Testen auf den Star-eater-Algorithmus (https://www.change.org/p/sony-remove-star-eater-en, https://www.cloudynights.com/topic/635441-aa-filter-spatial-filter-and-star-colours/page-2#entry8914661)
+Ein Gradient im Bild muss vor der Erstellung eines Flats korrigiert werden. Ansonsten wird das Sigma-Clipping aushebelt und es kommt zu Unregelmäßigkeiten im radialen Profil!
 - Calculate histogram  
-Selbsterklärend, speichert eine CSV mit dem Histogramm des Rohbilds (RGB) ab.
+Speichert eine CSV mit dem Histogramm des Rohbilds (RGB) ab.
 - Calculate radial profile  
 Ermittelt die Helligkeitskurve des Bildes in Abhängigkeit zum Abstand zur Bildmitte und speichert CSVs dazu ab. Zur Ermittlungslogik siehe "Statistics".
 - Export synthetic flat  
@@ -58,10 +56,10 @@ Schreiben einer PKL Datei des gedebayerten Bildes zum schnelleren Ausführen dar
 Das Histogramm eines Flats wird normalerweise durch das rechteckige Beschneiden beeinflusst. Mit dieser Option wird das Histogramm nur für den größtmöglichen Kreis im Bild berechnet.
 -  Extrapolate inside max  
 Radiale Profile können ihr Maximum statt bei Radius 0 bei größeren Radii aufweisen, wodurch im synthetischen Flat Ringe entstehen würden. Mit dieser Option wird das radiale Profil beim Maximum abgeschnitten und zum Zentrum hin mit einer quadratischen Funktion extrapoliert.
+-  Export corrected input images
+Es wird nicht nur das synthetische Flat als TIF ausgegeben, sondern auch das Originalbild, das gradientenbereinigte Originalbild sowie ein flat-bereinigtes Originalbild.
 -  Export synthetic flat as grey  
-Für das synthetische Flat wird für alle drei Farbkanäle das gleiche gemittelte radiale Profil verwendet.
--  Export synthetic flat debayered  
-Für das synthetische Flat wird RGB in drei Ebenen statt mit RGGB-Muster in einer Ebene geschrieben.
+Für das synthetische Flat wird für alle vier RGGB Untergitter das gleiche (grüne) radiale Profil verwendet. Im Ergebnisbild ist dann kein Karomuster zu sehen.
 -  Scale synthetic flat like original  
 Die relative Intensität des synthetischen Flats wird nicht auf 1 normiert sondern dem Originalbild entsprechend angepasst.
 
