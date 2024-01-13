@@ -2,7 +2,7 @@ Python-GUI zum Erstellen von synthetischen Flats und weiterer Rohbild-Analysen
 
 Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Programm verfügbar. Zum Starten nach Herunterladen und Entzippen "SyntheticFlatGUI.exe" ausführen.
 
-![GUI](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/5e4e80e8-ed4e-4cdc-9324-f7c86681f52a)
+![GUI](https://github.com/NablaDeltaPsi/syntheticflatgui/assets/98178269/b42a6961-fcb4-4582-83b8-781a18a2a3e7)
 
 ### Einleitung
  
@@ -58,10 +58,8 @@ Das Histogramm eines Flats wird normalerweise durch das rechteckige Beschneiden 
 Radiale Profile können ihr Maximum statt bei Radius 0 bei größeren Radii aufweisen, wodurch im synthetischen Flat Ringe entstehen würden. Mit dieser Option wird das radiale Profil beim Maximum abgeschnitten und zum Zentrum hin mit einer quadratischen Funktion extrapoliert.
 -  Export corrected input images
 Es wird nicht nur das synthetische Flat als TIF ausgegeben, sondern auch das Originalbild, das gradientenbereinigte Originalbild sowie ein flat-bereinigtes Originalbild.
--  Export synthetic flat as grey  
+-  Grey synthetic flat
 Für das synthetische Flat wird für alle vier RGGB Untergitter das gleiche (grüne) radiale Profil verwendet. Im Ergebnisbild ist dann kein Karomuster zu sehen.
--  Scale synthetic flat like original  
-Die relative Intensität des synthetischen Flats wird nicht auf 1 normiert sondern dem Originalbild entsprechend angepasst.
 
 ### Statistics
 Auswählen der verwendeten Statistik zur Berechnung des radialen Profils. Auf einem Ring (vgl. Bild oben) liegen mehrere Pixel mit unterschiedlichen Werten. Aus diesen Werten pro Ring kann der Mittelwert, der Median, das Maximum, oder das Minimum genommen werden, oder sie werden erst mit einem Sigma-Clipping aussortiert (empfohlen) und erst dann der Mittelwert genommen.
