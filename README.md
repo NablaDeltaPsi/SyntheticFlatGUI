@@ -1,4 +1,4 @@
-Python-GUI zum Erstellen von synthetischen Flats und weiterer Rohbild-Analysen
+## Python-GUI zum Erstellen von radialen Profilen und synthetischen Flats aus RAW-Bildern
 
 Für Windows-Benutzer ist unter Releases eine ZIP-Datei mit kompiliertem Programm verfügbar. Zum Starten nach Herunterladen und Entzippen "SyntheticFlatGUI.exe" ausführen.
 
