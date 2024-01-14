@@ -56,9 +56,9 @@ Schreiben einer PKL Datei des gedebayerten Bildes zum schnelleren Ausführen dar
 Das Histogramm eines Flats wird normalerweise durch das rechteckige Beschneiden beeinflusst. Mit dieser Option wird das Histogramm nur für den größtmöglichen Kreis im Bild berechnet.
 - Extrapolate inside max  
 Radiale Profile können ihr Maximum statt bei Radius 0 bei größeren Radii aufweisen, wodurch im synthetischen Flat Ringe entstehen würden. Mit dieser Option wird das radiale Profil beim Maximum abgeschnitten und zum Zentrum hin mit einer quadratischen Funktion extrapoliert.
-- Export corrected input images
+- Export corrected input images  
 Es wird nicht nur das synthetische Flat als TIF ausgegeben, sondern auch das Originalbild, das gradientenbereinigte Originalbild sowie ein flat-bereinigtes Originalbild.
-- Grey synthetic flat
+- Grey synthetic flat  
 Für das synthetische Flat wird für alle vier RGGB Untergitter das gleiche (grüne) radiale Profil verwendet. Im Ergebnisbild ist dann kein Karomuster zu sehen.
 
 ### Statistics
@@ -69,6 +69,6 @@ Die Berechnung des radialen Profils für ein 24 MP Bild kann einige Zeit dauern,
 
 ### Troubleshooting
 - Bisher nur mit Sony ARW Bildern getestet. Bei Problemen mit anderen Formaten mir gerne Testbilder schicken.
-- Bisher nur auf RGGB-Pattern ausgelegt. Bei Bedarf und Testbildern baue ich gerne eine Option für andere Pattern ein.
+- Bisher nur auf RGGB-Pattern ausgelegt. Bei Bedarf baue ich gerne eine Option für andere Pattern ein.
 - Mit zu hohem Bias-Wert kann es zu Problemen kommen. Eventuell mal ohne Bias (0) testen. Als Richtwert: Bei meiner Sony A7 II liegt der Bias bei 512.
 - Ein Gradient im Bild hebelt das Sigma-Clipping der radialen Profile aus. Bei unschönen Profilen unbedingt "Correct gradient" einschalten!
