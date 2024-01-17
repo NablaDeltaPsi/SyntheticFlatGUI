@@ -2,18 +2,17 @@ import tkinter as tk
 import tkinter.font
 import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
-import glob, os, sys, copy, numpy as np, math
 from configparser import ConfigParser
-import rawpy, cv2
-import pickle, bz2
+import glob, os, sys, copy, numpy as np, math
+import cv2, pickle, bz2
+from rawpy import imread
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 import threading
 from functools import lru_cache
 import datetime as dt
+from astropy.io import fits
 
 GUINAME = "SyntheticFlatGUI"
 VERSION = '1.3'
@@ -23,33 +22,63 @@ IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
 
-RAW_TYPES = '.arw .crw .cr2 .cr3 .nef .raf .rw2'
-IMAGE_TYPES = '.tif .tiff .jpeg .jpg .png'
+RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
+TIFTYPES = ['tif', 'tiff']
+FITSTYPES = ['fit', 'fits']
+OTHERTYPES = ['jpeg', 'jpg', 'png']
+FILETYPES = RAWTYPES + TIFTYPES + FITSTYPES + OTHERTYPES
 
 # STATIC MAJOR FUNCTIONS =====================================================
 def load_image(file):
     print("")
     print(file)
-    print("Trying to load pickle file...")
     if not os.path.isfile(file):
         print("File does not exist!\n\n")
         sys.exit()
     try:
+        print("Trying to load pickle file ... ", end='')
         im_deb = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
-                                         os.path.basename(file).split('.')[0] + ".pkl", 'rb'))
+                                         os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
         rawshape = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
-                                         os.path.basename(file).split('.')[0] + "_rawshape.pkl", 'rb'))
-        print("Use image from pickle file.")
+                                         os.path.basename(file).replace('.', '_') + "_rawshape.pkl", 'rb'))
+        print("success.")
         print("shape: ", im_deb.shape)
     except:
-        print("read file ...")
-        im_raw = rawpy.imread(file).raw_image_visible
-        rawshape = im_raw.shape
-        print("shape: ", im_raw.shape)
-        print("debayer ...")
-        im_deb = debayer(im_raw)
+        # no pickle file found
+        print("no success.")
+
+        # load image depending on type
+        imagetype = os.path.basename(file).split(".")[1].lower()
+        header = ""
+        if imagetype in RAWTYPES:
+            print("read raw image (" + imagetype.upper() + ") ...")
+            im_load = imread(file).raw_image_visible
+        elif imagetype in TIFTYPES:
+            print("read tif type image (" + imagetype.upper() + ") ...")
+            im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
+        elif imagetype in FITSTYPES:
+            print("read fits type image (" + imagetype.upper() + ") ...")
+            im_load, header = fits.getdata(file, ext=0, header=True)
+            print(header)
+        elif imagetype in OTHERTYPES:
+            print("read other type image (" + imagetype.upper() + ") ...")
+            im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
+        else:
+            print("image type not supported!!")
+            sys.exit()
+
+        # debayer, if necessary
+        rawshape = im_load.shape
+        print("shape: ", rawshape)
+        image_axes, color_axis = separate_axes(im_load)
+        if color_axis is not None:
+            print("no need to debayer ...")
+            im_deb = im_load
+        else:
+            print("debayer ...")
+            im_deb = debayer(im_load)
         print("shape: ", im_deb.shape)
-    return im_deb, rawshape
+    return im_deb, rawshape, header
 
 def write_pickle(im_deb, rawshape, file):
     # without 190 MB, 0 min
@@ -57,8 +86,8 @@ def write_pickle(im_deb, rawshape, file):
     # lzma     20 MB, 3 min
     # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
     savepath = create_folder(file, "Pickle_files")
-    pickle_filename = savepath + os.sep + os.path.basename(file).split('.')[0] + ".pkl"
-    pickle_filename_rawshape = savepath + os.sep + os.path.basename(file).split('.')[0] + "_rawshape.pkl"
+    pickle_filename = savepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl"
+    pickle_filename_rawshape = savepath + os.sep + os.path.basename(file).replace('.', '_') + "_rawshape.pkl"
     if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_rawshape):
         pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
         pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
@@ -339,6 +368,23 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
 
 
 # STATIC MINOR FUNCTIONS =====================================================
+
+def separate_axes(image):
+    # try to find a rgb dimension
+    color_axis = None
+    for d in range(len(image.shape)):
+        if image.shape[d] < 5:
+            color_axis = d
+            break
+
+    # calc tuple of image_axes
+    image_axes = []
+    for d in range(len(image.shape)):
+        if not d == color_axis:
+            image_axes.append(d)
+    image_axes = tuple(image_axes)
+
+    return image_axes, color_axis
 
 def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
     i = int(i)
@@ -720,7 +766,7 @@ class NewGUI():
         if self.running:
             return
         user_input = askopenfilename(initialdir=self.lastpath, multiple=True,
-              filetypes=[('RAW format (supported)', RAW_TYPES), ('Image format (not supported)', IMAGE_TYPES), ('all', '.*')])
+              filetypes=[('Images', ";".join(["*." + x for x in FILETYPES])), ('all', '.*')])
         if user_input:
             self.loaded_files = user_input
             self.update_labels(file=str(len(self.loaded_files)) + " files")
@@ -743,7 +789,7 @@ class NewGUI():
         self.update_labels(status="calc bias...")
         user_input_file = askopenfilename(initialdir=self.lastpath, multiple=True,
               filetypes=[('RAW format (supported)', RAW_TYPES), ('Image format (not supported)', IMAGE_TYPES), ('all', '.*')])
-        im_raw = rawpy.imread(user_input_file[0]).raw_image_visible
+        im_raw = imread(user_input_file[0]).raw_image_visible
         self.bias_value = int(sigma_clip_mean(im_raw))
         self.label_bias_var.set(self.bias_value)
         self.update_labels(status="ready")
@@ -802,7 +848,7 @@ class NewGUI():
                 # load
                 #print(dt.datetime.now())
                 self.update_labels(status="load...")
-                image, rawshape = load_image(file)
+                image, rawshape, header = load_image(file)
                 if self.check_stop(): return
 
                 # write pickle
