@@ -33,14 +33,13 @@ def load_image(file):
     print("")
     print(file)
     if not os.path.isfile(file):
-        print("File does not exist!\n\n")
-        sys.exit()
+        raise ValueError("File does not exist!\n\n")
     try:
         print("Trying to load pickle file ... ", end='')
         im_deb = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
                                          os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
-        rawshape = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
-                                         os.path.basename(file).replace('.', '_') + "_rawshape.pkl", 'rb'))
+        origshape = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
+                                         os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
         print("success.")
         print("shape: ", im_deb.shape)
     except:
@@ -64,33 +63,38 @@ def load_image(file):
             print("read other type image (" + imagetype.upper() + ") ...")
             im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
         else:
-            print("image type not supported!!")
-            sys.exit()
+            raise ValueError("image type not supported!!")
+
+        # remember original shape
+        origshape = im_load.shape
+        print("original shape: ", origshape)
+
+        # order axes
+        im_deb = order_axes(im_load, type='HWD')
+        print("ordered shape: ", im_deb.shape)
 
         # debayer, if necessary
-        rawshape = im_load.shape
-        print("shape: ", rawshape)
-        image_axes, color_axis = separate_axes(im_load)
-        if color_axis is not None:
+        if len(im_deb.shape) == 3:
             print("no need to debayer ...")
-            im_deb = im_load
-        else:
+        elif len(im_deb.shape) == 2:
             print("debayer ...")
             im_deb = debayer(im_load)
-        print("shape: ", im_deb.shape)
-    return im_deb, rawshape, header
+        else:
+            raise ValueError('Bad input shape')
+        print("debayered shape: ", im_deb.shape)
+    return im_deb, origshape, header
 
-def write_pickle(im_deb, rawshape, file):
+def write_pickle(im_deb, origshape, file):
     # without 190 MB, 0 min
     # gzip     30 MB, 3 min
     # lzma     20 MB, 3 min
     # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
     savepath = create_folder(file, "Pickle_files")
     pickle_filename = savepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl"
-    pickle_filename_rawshape = savepath + os.sep + os.path.basename(file).replace('.', '_') + "_rawshape.pkl"
-    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_rawshape):
+    pickle_filename_origshape = savepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl"
+    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape):
         pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
-        pickle.dump(rawshape, bz2.BZ2File(pickle_filename_rawshape, 'wb'))
+        pickle.dump(origshape, bz2.BZ2File(pickle_filename_origshape, 'wb'))
 
 
 def corr_gradient(image, resolution_factor=4):
@@ -369,6 +373,16 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
 
 # STATIC MINOR FUNCTIONS =====================================================
 
+def order_axes(image, type='HWD'):
+    image_shape = image.shape
+    axes_sort = np.argsort(image_shape)[::-1]
+    image = np.transpose(image, axes=axes_sort)
+    if type == 'HWD':
+        image = np.swapaxes(image, 0, 1)
+    if len(image.shape) == 3 and type == 'DHW':
+        image = np.swapaxes(image, 0, 2)
+    return image
+
 def separate_axes(image):
     # try to find a rgb dimension
     color_axis = None
@@ -522,8 +536,8 @@ def write_tif_image(image, original_file, folder, suffix):
     else:
         # input is already bayered
         image_write = image
-    print("write image", suffix, "input shape", image.shape)
-    print("write image", suffix, "output shape", image_write.shape)
+    print("write image \"", suffix, "\" -> input shape", image.shape)
+    print("write image \"", suffix, "\" -> output shape", image_write.shape)
     savepath = create_folder(original_file, folder)
     image_write = np.float32(image_write / np.max(image_write))
     cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
@@ -848,13 +862,13 @@ class NewGUI():
                 # load
                 #print(dt.datetime.now())
                 self.update_labels(status="load...")
-                image, rawshape, header = load_image(file)
+                image, origshape, header = load_image(file)
                 if self.check_stop(): return
 
                 # write pickle
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
-                    write_pickle(image, rawshape, file)
+                    write_pickle(image, origshape, file)
                     if self.check_stop(): return
 
                 # write original image
@@ -907,7 +921,7 @@ class NewGUI():
                     self.update_labels(status="calc synthetic flat...")
                     image_flat = calc_synthetic_flat(radprof4,
                                grey_flat=self.set_grey_flat.get(),
-                               tif_size=(rawshape[0], rawshape[1]))
+                               tif_size=(origshape[0], origshape[1]))
                     if self.check_stop(): return
 
                     # write synthetic flat tif
@@ -941,6 +955,7 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    #print(own_gcd(40, 60))
+    #x = np.zeros((400, 600, 3))
+    #print(order_axes(x, type='DHW').shape)
 
 
