@@ -29,17 +29,15 @@ OTHERTYPES = ['jpeg', 'jpg', 'png']
 FILETYPES = RAWTYPES + TIFTYPES + FITSTYPES + OTHERTYPES
 
 # STATIC MAJOR FUNCTIONS =====================================================
-def load_image(file):
+def load_image(file, picklepath):
     print("")
     print(file)
     if not os.path.isfile(file):
         raise ValueError("File does not exist!\n\n")
     try:
-        print("Trying to load pickle file ... ", end='')
-        im_deb = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
-                                         os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
-        origshape = pickle.load(bz2.BZ2File(os.path.dirname(file) + os.sep + "Pickle_files" + os.sep +
-                                         os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
+        im_deb = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
+        origshape = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
+        header = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_header.pkl", 'rb'))
         print("success.")
         print("shape: ", im_deb.shape)
     except:
@@ -82,19 +80,24 @@ def load_image(file):
         else:
             raise ValueError('Bad input shape')
         print("debayered shape: ", im_deb.shape)
+
+        for c in range(im_deb.shape[2]):
+            print(im_deb[:5,:5,c])
+
     return im_deb, origshape, header
 
-def write_pickle(im_deb, origshape, file):
+def write_pickle(im_deb, origshape, header, savepath, original_file):
     # without 190 MB, 0 min
     # gzip     30 MB, 3 min
     # lzma     20 MB, 3 min
     # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
-    savepath = create_folder(file, "Pickle_files")
-    pickle_filename = savepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl"
-    pickle_filename_origshape = savepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl"
-    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape):
+    pickle_filename = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + ".pkl"
+    pickle_filename_origshape = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + "_origshape.pkl"
+    pickle_filename_header = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + "_header.pkl"
+    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape) or not os.path.isfile(pickle_filename_header):
         pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
         pickle.dump(origshape, bz2.BZ2File(pickle_filename_origshape, 'wb'))
+        pickle.dump(header, bz2.BZ2File(pickle_filename_header, 'wb'))
 
 
 def corr_gradient(image, resolution_factor=4):
@@ -424,13 +427,13 @@ def debayer(image, separate_green=True):
     for n in range(rows):
         for m in range(cols):
             if n % 2 == 0 and m % 2 == 0:  # links oben
-                db_image[int((n + 0) / 2), int((m + 0) / 2), 0] = int(image[n, m])  # R
+                db_image[int((n + 0) / 2), int((m + 0) / 2), 0] = image[n, m]  # R
             if n % 2 == 0 and m % 2 == 1:  # rechts oben
-                db_image[int((n + 0) / 2), int((m - 1) / 2), 1] = int(image[n, m])  # G
+                db_image[int((n + 0) / 2), int((m - 1) / 2), 1] = image[n, m]  # G
             if n % 2 == 1 and m % 2 == 0:  # links unten
-                db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = int(image[n, m])  # G
+                db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = image[n, m]  # G
             if n % 2 == 1 and m % 2 == 1:  # rechts unten
-                db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = int(image[n, m])  # B
+                db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = image[n, m]  # B
     if not separate_green:
         db_image = merge_green(db_image)
         print("shape", db_image.shape)
@@ -439,7 +442,7 @@ def debayer(image, separate_green=True):
 
 def merge_green(image):
     image_r = image[:, :, 0]
-    image_g = ((image[:, :, 1] + image[:, :, 2]) / 2).astype(int)
+    image_g = (image[:, :, 1] + image[:, :, 2]) / 2
     image_b = image[:, :, 3]
     image = np.stack((image_r, image_g, image_b), axis=2)
     return image
@@ -478,13 +481,12 @@ def cached_dist(dx, dy):
     return math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
 
 
-def create_folder(file, folder_name):
-    savepath = os.path.dirname(file) + os.sep + folder_name
+def create_folder(folder_path):
     try:
-        os.mkdir(savepath)
+        os.mkdir(folder_path)
     except:
         pass
-    return savepath
+    return folder_path
 
 
 def odd_int(number):
@@ -529,7 +531,7 @@ def sigma_clip_mean(array, sigma_clip=2.0):
     return result
 
 
-def write_tif_image(image, original_file, folder, suffix):
+def write_tif_image(image, savepath, original_file, suffix):
     if len(image.shape) >= 3:
         # input is debayered, needs to be bayered
         image_write = bayer(image)
@@ -538,13 +540,10 @@ def write_tif_image(image, original_file, folder, suffix):
         image_write = image
     print("write image \"", suffix, "\" -> input shape", image.shape)
     print("write image \"", suffix, "\" -> output shape", image_write.shape)
-    savepath = create_folder(original_file, folder)
-    image_write = np.float32(image_write / np.max(image_write))
-    cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
+    cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", np.float32(image_write))
 
 
-def write_csv(data, original_file, folder, suffix):
-    savepath = create_folder(original_file, folder)
+def write_csv(data, savepath, original_file, suffix):
     fmt = '%.10f', '%.10f', '%.10f', '%.10f'
     np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
                data, delimiter=",", fmt=fmt)
@@ -859,22 +858,27 @@ class NewGUI():
                 counter += 1
                 self.update_labels(file=os.path.basename(file) + " (" + str(counter) + "/" + str(len(self.loaded_files)) + ")")
 
+                # savepath
+                savepath = create_folder(os.path.dirname(file) + os.sep + GUINAME)
+                picklepath = create_folder(savepath + os.sep + "pickle")
+                csvpath = create_folder(savepath + os.sep + "csv")
+
                 # load
                 #print(dt.datetime.now())
                 self.update_labels(status="load...")
-                image, origshape, header = load_image(file)
+                image, origshape, header = load_image(file, picklepath)
                 if self.check_stop(): return
 
                 # write pickle
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
-                    write_pickle(image, origshape, file)
+                    write_pickle(image, origshape, header, picklepath, file)
                     if self.check_stop(): return
 
                 # write original image
                 if self.set_export_corr_input.get():
                     self.update_labels(status="write original tif...")
-                    write_tif_image(image, file, "TIF_images", "_0_input")
+                    write_tif_image(image, savepath, file, "_0_input")
                     if self.check_stop(): return
 
                 # gradient
@@ -886,7 +890,7 @@ class NewGUI():
                     # write gradient-corrected image
                     if self.set_export_corr_input.get():
                         self.update_labels(status="write gradcorr tif...")
-                        write_tif_image(image, file, "TIF_images", "_1_gradcorr")
+                        write_tif_image(image, savepath, file, "_1_gradcorr")
                         if self.check_stop(): return
 
                 # subtract bias
@@ -898,7 +902,7 @@ class NewGUI():
                 if self.opt_histogram.get():
                     self.update_labels(status="calc histogram...")
                     data = calc_histograms(image, self.set_circular_hist.get())
-                    write_csv(data, file, "CSV_files", "_histogram")
+                    write_csv(data, csvpath, file, "_histogram")
                     if self.check_stop(): return
 
                 # radial profile
@@ -908,10 +912,10 @@ class NewGUI():
                                                             statistics=self.radio_statistics.get(),
                                                             extrapolate_max=self.set_extrapolate_max.get(),
                                                             resolution_factor=resolution_factor)
-                    write_csv(radprof1, file, "CSV_files", "_radprof_0_raw_mean")
-                    write_csv(radprof2, file, "CSV_files", "_radprof_1_clipped")
-                    write_csv(radprof3, file, "CSV_files", "_radprof_2_cut")
-                    write_csv(radprof4, file, "CSV_files", "_radprof_3_smooth")
+                    write_csv(radprof1, csvpath, file, "_radprof_0_raw_mean")
+                    write_csv(radprof2, csvpath, file, "_radprof_1_clipped")
+                    write_csv(radprof3, csvpath, file, "_radprof_2_cut")
+                    write_csv(radprof4, csvpath, file, "_radprof_3_smooth")
                     if self.check_stop(): return
 
                 # synthetic flat
@@ -926,14 +930,14 @@ class NewGUI():
 
                     # write synthetic flat tif
                     self.update_labels(status="write synthflat tif...")
-                    write_tif_image(image_flat, file, "TIF_images", "_2_synthflat")
+                    write_tif_image(image_flat, savepath, file, "_2_synthflat")
                     if self.check_stop(): return
 
                     # correct input
                     if self.set_export_corr_input.get():
                         self.update_labels(status="export flat-corrected...")
                         image = bayer(image)
-                        write_tif_image(image / image_flat, file, "TIF_images", "_3_flatcorr")
+                        write_tif_image(image / image_flat, savepath, file, "_3_flatcorr")
 
                 self.update_labels(status="finished.")
                 print("cached_dist:", cached_dist.cache_info())
