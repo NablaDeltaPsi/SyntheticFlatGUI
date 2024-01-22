@@ -15,7 +15,7 @@ import datetime as dt
 from astropy.io import fits
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.3'
+VERSION = '1.4'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -82,7 +82,9 @@ def load_image(file, picklepath):
         print("debayered shape: ", im_deb.shape)
 
         for c in range(im_deb.shape[2]):
-            print(im_deb[:5,:5,c])
+            cpx_x = int(im_deb.shape[0] / 2)
+            cpx_y = int(im_deb.shape[1] / 2)
+            print(im_deb[cpx_x-1:cpx_x+1,cpx_y-1:cpx_y+1,c])
 
     return im_deb, origshape, header
 
@@ -449,6 +451,8 @@ def merge_green(image):
 
 
 def bayer(image):
+    if len(image.shape) < 3:
+        return image
     rows = image.shape[0]
     cols = image.shape[1]
     colors = image.shape[2]
@@ -531,16 +535,35 @@ def sigma_clip_mean(array, sigma_clip=2.0):
     return result
 
 
-def write_tif_image(image, savepath, original_file, suffix):
-    if len(image.shape) >= 3:
-        # input is debayered, needs to be bayered
-        image_write = bayer(image)
+def write_image(image, origshape, header, savepath, original_file, suffix):
+    # determine case
+    if len(origshape) >= 3:
+        outdebayer = True
     else:
-        # input is already bayered
+        outdebayer = False
+    origtype = os.path.basename(original_file).split(".")[1].lower()
+    if origtype in RAWTYPES:
+        outtype = 'tif'
+        outdebayer = False
+    elif origtype in TIFTYPES:
+        outtype = 'tif'
+    else:
+        outtype = 'fit'
+
+    # reformat
+    if outdebayer:
+        # use as is
         image_write = image
+    else:
+        # bayer image, if it is debayered
+        image_write = bayer(image)
     print("write image \"", suffix, "\" -> input shape", image.shape)
     print("write image \"", suffix, "\" -> output shape", image_write.shape)
-    cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", np.float32(image_write))
+
+    # write
+    if outtype == 'tif':
+        image_write = np.float32(image_write / np.max(image_write))
+        cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
 
 
 def write_csv(data, savepath, original_file, suffix):
@@ -878,7 +901,7 @@ class NewGUI():
                 # write original image
                 if self.set_export_corr_input.get():
                     self.update_labels(status="write original tif...")
-                    write_tif_image(image, savepath, file, "_0_input")
+                    write_image(image, origshape, header, savepath, file, "_0_input")
                     if self.check_stop(): return
 
                 # gradient
@@ -890,7 +913,7 @@ class NewGUI():
                     # write gradient-corrected image
                     if self.set_export_corr_input.get():
                         self.update_labels(status="write gradcorr tif...")
-                        write_tif_image(image, savepath, file, "_1_gradcorr")
+                        write_image(image, origshape, header, savepath, file, "_1_gradcorr")
                         if self.check_stop(): return
 
                 # subtract bias
@@ -930,14 +953,14 @@ class NewGUI():
 
                     # write synthetic flat tif
                     self.update_labels(status="write synthflat tif...")
-                    write_tif_image(image_flat, savepath, file, "_2_synthflat")
+                    write_image(image_flat, origshape, header, savepath, file, "_2_synthflat")
                     if self.check_stop(): return
 
                     # correct input
                     if self.set_export_corr_input.get():
                         self.update_labels(status="export flat-corrected...")
                         image = bayer(image)
-                        write_tif_image(image / image_flat, savepath, file, "_3_flatcorr")
+                        write_image(image / image_flat, origshape, header, savepath, file, "_3_flatcorr")
 
                 self.update_labels(status="finished.")
                 print("cached_dist:", cached_dist.cache_info())
