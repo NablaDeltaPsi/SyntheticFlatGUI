@@ -20,7 +20,8 @@ VERSION = '1.4'
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
-RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
+RADIAL_RESOLUTION = 1000  # should be larger than 16 bit (65536)
+DERIVE_RAD = True
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
 TIFTYPES = ['tif', 'tiff']
@@ -35,6 +36,7 @@ def load_image(file, picklepath):
     if not os.path.isfile(file):
         raise ValueError("File does not exist!\n\n")
     try:
+        print("Search and read pickle files ...", end='')
         im_deb = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
         origshape = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
         header = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_header.pkl", 'rb'))
@@ -87,19 +89,6 @@ def load_image(file, picklepath):
             print(im_deb[cpx_x-1:cpx_x+1,cpx_y-1:cpx_y+1,c])
 
     return im_deb, origshape, header
-
-def write_pickle(im_deb, origshape, header, savepath, original_file):
-    # without 190 MB, 0 min
-    # gzip     30 MB, 3 min
-    # lzma     20 MB, 3 min
-    # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
-    pickle_filename = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + ".pkl"
-    pickle_filename_origshape = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + "_origshape.pkl"
-    pickle_filename_header = savepath + os.sep + os.path.basename(original_file).replace('.', '_') + "_header.pkl"
-    if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape) or not os.path.isfile(pickle_filename_header):
-        pickle.dump(im_deb, bz2.BZ2File(pickle_filename, 'wb'))
-        pickle.dump(origshape, bz2.BZ2File(pickle_filename_origshape, 'wb'))
-        pickle.dump(header, bz2.BZ2File(pickle_filename_header, 'wb'))
 
 
 def corr_gradient(image, resolution_factor=4):
@@ -174,7 +163,6 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # acquire pixel values
     image_height = image.shape[0]
     image_width = image.shape[1]
-    maxrad = int(dist_from_center(0, 0, image_height, image_width))
     radii = []
     rad_counts = {}
     for i in range(image_height):
@@ -193,6 +181,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
             rad_counts[rad][1].append(image[i, j, 1])
             rad_counts[rad][1].append(image[i, j, 2])
             rad_counts[rad][2].append(image[i, j, 3])
+    maxrad = dist_from_center(0, 0, image_height, image_width)
     rad_profile = np.zeros((len(radii), 4))
     rad_profile_raw_mean = np.zeros((len(radii), 4))
     index = 0
@@ -312,7 +301,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
     start = dt.datetime.now()
 
     # initialize image
-    height, width = sorted(tif_size)
+    height, width = sorted(tif_size[:2])
     halfheight = int(height / 2)
     halfwidth = int(width / 2)
     im_syn = np.zeros((int(height), int(width)))
@@ -324,18 +313,26 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
     # match profile to output size
     maxrad_this = dist_from_center(0, 0, height, width)
 
-    # iterate image and write pixels
+    # set kmax for reusing radii
+    if DERIVE_RAD:
+        kmax = halfheight
+    else:
+        kmax = 2
+
+    # halfheight and halfwidth are pixel references
+    # but the true center is in between pixels
+    # example height = 10 -> halfheight = 5, halfheight_ = 4.5 in between pixel 4 and 5
+    halfheight_ = halfheight - 0.5
+    halfwidth_ = halfwidth - 0.5
+
+    # iterate one quadrant and write pixels in all four
+    # height = 10 -> iterate di from 0 to 4
     for di in range(halfheight):
         for dj in range(halfwidth):
 
             # absolute pixel indices
             i = halfheight + di
             j = halfwidth + dj
-
-            # halfheight and halfwidth are pixel references
-            # but the true center is in between pixels
-            halfheight_ = halfheight - 0.5
-            halfwidth_  = halfwidth  - 0.5
 
             # check already written
             if not im_syn[i, j] == 0:
@@ -350,10 +347,14 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
             # write pixel brightness in all quadrants
             # since the radii of the multiples are already known, use them here (r_index * k)
             # write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j)
-            for k in range(1, halfheight):
-                if di * k < halfheight_ and dj * k < halfwidth_:
-                    di_ = di * k + 0.5
-                    dj_ = dj * k + 0.5
+            # height = 10, di = 0, k = 1 -> di_ = 0.5
+            # height = 10, di = 0, k = 2 -> di_ = 1.5
+            for k in range(1, kmax):
+                di_ = di * k + 0.5
+                dj_ = dj * k + 0.5
+                if di_ < halfheight and dj_ < halfwidth and r_index * k < RADIAL_RESOLUTION:
+                    # height = 10, di_ = 0.5 -> halfheight_ + di_ = 5
+                    # height = 10, di_ = 1.5 -> halfheight_ + di_ = 6
                     write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ + dj_)
                     write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ - dj_)
                     write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ - di_, halfwidth_ + dj_)
@@ -474,8 +475,10 @@ def bayer(image):
 
 
 def dist_from_center(i, j, height, width):
-    dx = int(abs(i - height / 2))
-    dy = int(abs(j - width / 2))
+    # index at half height is actually not center but 0.5 off
+    # pixel 4 and 5 both are at radius 0.5 for an array with length 10
+    dx = abs(i - height / 2 + 0.5)
+    dy = abs(j - width  / 2 + 0.5)
     dx, dy = sorted([dx, dy])  # sort helps caching of symmetric function
     return cached_dist(dx, dy)
 
@@ -535,42 +538,121 @@ def sigma_clip_mean(array, sigma_clip=2.0):
     return result
 
 
-def write_image(image, origshape, header, savepath, original_file, suffix):
-    # determine case
-    if len(origshape) >= 3:
-        outdebayer = True
-    else:
-        outdebayer = False
-    origtype = os.path.basename(original_file).split(".")[1].lower()
-    if origtype in RAWTYPES:
-        outtype = 'tif'
-        outdebayer = False
-    elif origtype in TIFTYPES:
-        outtype = 'tif'
-    else:
-        outtype = 'fit'
-
-    # reformat
-    if outdebayer:
-        # use as is
-        image_write = image
-    else:
-        # bayer image, if it is debayered
-        image_write = bayer(image)
-    print("write image \"", suffix, "\" -> input shape", image.shape)
-    print("write image \"", suffix, "\" -> output shape", image_write.shape)
-
-    # write
-    if outtype == 'tif':
-        image_write = np.float32(image_write / np.max(image_write))
-        cv2.imwrite(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".tif", image_write)
-
-
 def write_csv(data, savepath, original_file, suffix):
     fmt = '%.10f', '%.10f', '%.10f', '%.10f'
     np.savetxt(savepath + os.sep + os.path.basename(original_file).split('.')[0] + suffix + ".csv",
                data, delimiter=",", fmt=fmt)
 
+
+# IMAGE CLASS =====================================================
+class Image():
+    def __init__(self, file):
+
+        # init attributes
+        self.file = file
+        self.image = None
+        self.header = ''
+        self.origpath = os.path.dirname(file)
+        self.origtype = os.path.basename(self.file).split(".")[1].lower()
+        self.origshape = None
+        self.origdebayer = None
+        self.outpath = ''
+        self.outpath_pickle = ''
+        self.outpath_csv = ''
+        self.outtype = ''
+        self.outdebayer = None
+        self.radprof = None
+        self.image_flat = None
+
+        self.set_outpaths()
+
+    def set_outpaths(self):
+        self.outpath = create_folder(self.origpath + os.sep + GUINAME)
+        self.outpath_pickle = create_folder(self.origpath + os.sep + "pickle")
+        self.outpath_csv = create_folder(self.origpath + os.sep + "csv")
+
+    def set_outtype(self):
+        if self.origtype in RAWTYPES:
+            self.outtype = 'tif'
+        elif self.origtype in TIFTYPES:
+            self.outtype = 'tif'
+        else:
+            self.outtype = 'fit'
+
+    def set_origdebayer(self):
+        if len(self.origshape) >= 3:
+            self.origdebayer = True
+        else:
+            self.origdebayer = False
+
+    def load(self):
+        self.image, self.origshape, self.header = load_image(self.file, self.outpath_pickle)
+        self.set_outtype()
+        self.set_origdebayer()
+
+    def write_pickle(self):
+        # without 190 MB, 0 min
+        # gzip     30 MB, 3 min
+        # lzma     20 MB, 3 min
+        # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
+        pickle_filename = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + ".pkl"
+        pickle_filename_origshape = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + "_origshape.pkl"
+        pickle_filename_header = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + "_header.pkl"
+        if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape) or not os.path.isfile(pickle_filename_header):
+            pickle.dump(self.image, bz2.BZ2File(pickle_filename, 'wb'))
+            pickle.dump(self.origshape, bz2.BZ2File(pickle_filename_origshape, 'wb'))
+            pickle.dump(self.header, bz2.BZ2File(pickle_filename_header, 'wb'))
+
+    def write_image(self, suffix, flat=False):
+        # determine case
+        if len(self.origshape) >= 3 and not self.origtype in RAWTYPES:
+            self.outdebayer = True
+        else:
+            self.outdebayer = False
+
+        if flat:
+            print("write image \"", suffix, "\" -> input shape", self.image_flat.shape)
+            image_write = self.image_flat
+        else:
+            print("write image \"", suffix, "\" -> input shape", self.image.shape)
+            image_write = self.image
+
+        # reformat
+        if self.outdebayer:
+            # use as is
+            image_write = image_write
+        else:
+            # bayer image, if it is debayered
+            image_write = bayer(image_write)
+        print("write image \"", suffix, "\" -> output shape", image_write.shape)
+
+        # write
+        if self.outtype == 'tif':
+            image_write = np.float32(image_write / np.max(image_write))
+            print(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + ".tif")
+            cv2.imwrite(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + ".tif", image_write)
+
+    def gradcorr(self, resolution_factor):
+        self.image = corr_gradient(self.image, resolution_factor=resolution_factor)
+
+    def subtract_bias(self, bias_value):
+        self.image = self.image - bias_value
+
+    def calc_histogram(self, circular=False):
+        data = calc_histograms(self.image, circular=circular)
+        write_csv(data, self.outpath_csv, self.file, "_histogram")
+
+    def calc_rad_profile(self, statistics=2, extrapolate_max=True, resolution_factor=4):
+        radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(self.image, statistics=statistics, extrapolate_max=extrapolate_max, resolution_factor=resolution_factor)
+        write_csv(radprof1, self.outpath_csv, self.file, "_radprof_0_raw_mean")
+        write_csv(radprof2, self.outpath_csv, self.file, "_radprof_1_clipped")
+        write_csv(radprof3, self.outpath_csv, self.file, "_radprof_2_cut")
+        write_csv(radprof4, self.outpath_csv, self.file, "_radprof_3_smooth")
+        self.radprof = radprof4
+
+    def calc_synthetic_flat(self, grey_flat=False):
+        self.image_flat = calc_synthetic_flat(self.radprof, grey_flat=grey_flat, tif_size=self.origshape)
+        self.image = bayer(self.image) / self.image_flat
 
 
 # TKINTER CLASS =====================================================
@@ -881,64 +963,51 @@ class NewGUI():
                 counter += 1
                 self.update_labels(file=os.path.basename(file) + " (" + str(counter) + "/" + str(len(self.loaded_files)) + ")")
 
-                # savepath
-                savepath = create_folder(os.path.dirname(file) + os.sep + GUINAME)
-                picklepath = create_folder(savepath + os.sep + "pickle")
-                csvpath = create_folder(savepath + os.sep + "csv")
-
                 # load
-                #print(dt.datetime.now())
                 self.update_labels(status="load...")
-                image, origshape, header = load_image(file, picklepath)
+                imobj = Image(file)
+                imobj.load()
                 if self.check_stop(): return
 
                 # write pickle
                 if self.set_write_pickle.get():
                     self.update_labels(status="save pickle file...")
-                    write_pickle(image, origshape, header, picklepath, file)
+                    imobj.write_pickle()
                     if self.check_stop(): return
 
                 # write original image
                 if self.set_export_corr_input.get():
                     self.update_labels(status="write original tif...")
-                    write_image(image, origshape, header, savepath, file, "_0_input")
+                    imobj.write_image("_0_input")
                     if self.check_stop(): return
 
                 # gradient
                 if self.opt_gradient.get():
                     self.update_labels(status="calc gradient...")
-                    image = corr_gradient(image, resolution_factor=resolution_factor)
+                    imobj.gradcorr(resolution_factor)
                     if self.check_stop(): return
 
                     # write gradient-corrected image
                     if self.set_export_corr_input.get():
                         self.update_labels(status="write gradcorr tif...")
-                        write_image(image, origshape, header, savepath, file, "_1_gradcorr")
+                        imobj.write_image("_1_gradcorr")
                         if self.check_stop(): return
 
                 # subtract bias
                 self.update_labels(status="subtract bias...")
-                image = image - self.bias_value
+                imobj.subtract_bias(self.bias_value)
                 if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
                     self.update_labels(status="calc histogram...")
-                    data = calc_histograms(image, self.set_circular_hist.get())
-                    write_csv(data, csvpath, file, "_histogram")
+                    imobj.calc_histogram(circular=self.set_circular_hist.get())
                     if self.check_stop(): return
 
                 # radial profile
                 if self.opt_radprof.get():
                     self.update_labels(status="calc radial profile...")
-                    radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(image,
-                                                            statistics=self.radio_statistics.get(),
-                                                            extrapolate_max=self.set_extrapolate_max.get(),
-                                                            resolution_factor=resolution_factor)
-                    write_csv(radprof1, csvpath, file, "_radprof_0_raw_mean")
-                    write_csv(radprof2, csvpath, file, "_radprof_1_clipped")
-                    write_csv(radprof3, csvpath, file, "_radprof_2_cut")
-                    write_csv(radprof4, csvpath, file, "_radprof_3_smooth")
+                    imobj.calc_rad_profile(statistics=self.radio_statistics.get(), extrapolate_max=self.set_extrapolate_max.get(), resolution_factor=resolution_factor)
                     if self.check_stop(): return
 
                 # synthetic flat
@@ -946,21 +1015,19 @@ class NewGUI():
 
                     # calculate synthetic flat
                     self.update_labels(status="calc synthetic flat...")
-                    image_flat = calc_synthetic_flat(radprof4,
-                               grey_flat=self.set_grey_flat.get(),
-                               tif_size=(origshape[0], origshape[1]))
+                    imobj.calc_synthetic_flat(grey_flat=self.set_grey_flat.get())
                     if self.check_stop(): return
 
                     # write synthetic flat tif
                     self.update_labels(status="write synthflat tif...")
-                    write_image(image_flat, origshape, header, savepath, file, "_2_synthflat")
+                    imobj.write_image("_2_synthflat", flat=True)
                     if self.check_stop(): return
 
                     # correct input
                     if self.set_export_corr_input.get():
                         self.update_labels(status="export flat-corrected...")
-                        image = bayer(image)
-                        write_image(image / image_flat, origshape, header, savepath, file, "_3_flatcorr")
+                        imobj.write_image("_3_flatcorr")
+                        if self.check_stop(): return
 
                 self.update_labels(status="finished.")
                 print("cached_dist:", cached_dist.cache_info())
