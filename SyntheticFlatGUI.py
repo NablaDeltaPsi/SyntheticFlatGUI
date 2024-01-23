@@ -20,7 +20,7 @@ VERSION = '1.4'
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
-RADIAL_RESOLUTION = 1000  # should be larger than 16 bit (65536)
+RADIAL_RESOLUTION = 100  # should be larger than 16 bit (65536)
 DERIVE_RAD = True
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
@@ -36,7 +36,7 @@ def load_image(file, picklepath):
     if not os.path.isfile(file):
         raise ValueError("File does not exist!\n\n")
     try:
-        print("Search and read pickle files ...", end='')
+        print("Search and read pickle files ... ", end='')
         im_deb = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
         origshape = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
         header = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_header.pkl", 'rb'))
@@ -315,15 +315,12 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
 
     # set kmax for reusing radii
     if DERIVE_RAD:
-        kmax = halfheight
+        kmax = int(height / 2)
     else:
         kmax = 2
 
-    # halfheight and halfwidth are pixel references
-    # but the true center is in between pixels
-    # example height = 10 -> halfheight = 5, halfheight_ = 4.5 in between pixel 4 and 5
-    halfheight_ = halfheight - 0.5
-    halfwidth_ = halfwidth - 0.5
+    # print error only once
+    printed_error = False
 
     # iterate one quadrant and write pixels in all four
     # height = 10 -> iterate di from 0 to 4
@@ -346,25 +343,28 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
 
             # write pixel brightness in all quadrants
             # since the radii of the multiples are already known, use them here (r_index * k)
-            # write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j)
-            # height = 10, di = 0, k = 1 -> di_ = 0.5
-            # height = 10, di = 0, k = 2 -> di_ = 1.5
+            di_, dj_ = to_centersystem(i, j, height, width)
             for k in range(1, kmax):
-                di_ = di * k + 0.5
-                dj_ = dj * k + 0.5
-                if di_ < halfheight and dj_ < halfwidth and r_index * k < RADIAL_RESOLUTION:
-                    # height = 10, di_ = 0.5 -> halfheight_ + di_ = 5
-                    # height = 10, di_ = 1.5 -> halfheight_ + di_ = 6
-                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ + dj_)
-                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ + di_, halfwidth_ - dj_)
-                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ - di_, halfwidth_ + dj_)
-                    write_flat_pixel(im_syn, rad_profile, grey_flat, r_index * k, halfheight_ - di_, halfwidth_ - dj_)
+                k_di_ = di_ * k
+                k_dj_ = dj_ * k
+                k_r_index = r_index * k
+                if k_di_ < halfheight and k_dj_ < halfwidth:
+                    for q in range(4):
+                        k_i, k_j = to_cornersystem(k_di_, k_dj_, height, width, quadrant=q+1)
+                        # check already written
+                        if not im_syn[k_i, k_j] == 0 and not printed_error:
+                            print("Pixel already written!")
+                            print("x:", di_, "*", k, "=", k_di_, "->", k_i)
+                            print("y:", dj_, "*", k, "=", k_dj_, "->", k_j)
+                            printed_error = True
+                        write_flat_pixel(im_syn, rad_profile, grey_flat, k_r_index, k_i, k_j)
                 else:
                     break
 
     # convert to 16 bit
     im_syn = im_syn / np.max(im_syn)
     print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
+    print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
     print("minimum:  ", np.min(im_syn[im_syn > 0]))
     im_syn = (2 ** 16 - 1) * im_syn
     im_syn = im_syn.astype(np.uint16)
@@ -474,11 +474,42 @@ def bayer(image):
     return b_image
 
 
-def dist_from_center(i, j, height, width):
+def to_centersystem(x, y, height, width):
     # index at half height is actually not center but 0.5 off
     # pixel 4 and 5 both are at radius 0.5 for an array with length 10
-    dx = abs(i - height / 2 + 0.5)
-    dy = abs(j - width  / 2 + 0.5)
+    x_ = x - height / 2 + 0.5
+    y_ = y - width  / 2 + 0.5
+    return x_, y_
+
+
+def to_cornersystem(x_, y_, height, width, quadrant=0):
+    x = height / 2 - 0.5
+    y = width  / 2 - 0.5
+    if quadrant in [0,2]:
+        x += x_
+        y += y_
+    elif quadrant == 1: # top right with positive x_ and y_
+        x += x_
+        y -= y_
+    elif quadrant == 3:
+        x -= x_
+        y += y_
+    elif quadrant == 4:
+        x -= x_
+        y -= y_
+    else:
+        x += x_
+        y += y_
+    return int(x), int(y)
+
+def dist_from_center(i, j, height, width, centersystem=False):
+    if centersystem:
+        dx = i
+        dy = j
+    else:
+        dx, dy = to_centersystem(i, j, height, width)
+    dx = abs(dx)
+    dy = abs(dy)
     dx, dy = sorted([dx, dy])  # sort helps caching of symmetric function
     return cached_dist(dx, dy)
 
@@ -568,8 +599,8 @@ class Image():
 
     def set_outpaths(self):
         self.outpath = create_folder(self.origpath + os.sep + GUINAME)
-        self.outpath_pickle = create_folder(self.origpath + os.sep + "pickle")
-        self.outpath_csv = create_folder(self.origpath + os.sep + "csv")
+        self.outpath_pickle = create_folder(self.outpath + os.sep + "pickle")
+        self.outpath_csv = create_folder(self.outpath + os.sep + "csv")
 
     def set_outtype(self):
         if self.origtype in RAWTYPES:
@@ -604,6 +635,8 @@ class Image():
             pickle.dump(self.header, bz2.BZ2File(pickle_filename_header, 'wb'))
 
     def write_image(self, suffix, flat=False):
+        print("write image \"", suffix, "\"")
+
         # determine case
         if len(self.origshape) >= 3 and not self.origtype in RAWTYPES:
             self.outdebayer = True
@@ -611,10 +644,10 @@ class Image():
             self.outdebayer = False
 
         if flat:
-            print("write image \"", suffix, "\" -> input shape", self.image_flat.shape)
+            print("input", self.image_flat.shape)
             image_write = self.image_flat
         else:
-            print("write image \"", suffix, "\" -> input shape", self.image.shape)
+            print("input", self.image.shape)
             image_write = self.image
 
         # reformat
@@ -624,7 +657,7 @@ class Image():
         else:
             # bayer image, if it is debayered
             image_write = bayer(image_write)
-        print("write image \"", suffix, "\" -> output shape", image_write.shape)
+        print("output", image_write.shape)
 
         # write
         if self.outtype == 'tif':
@@ -918,7 +951,7 @@ class NewGUI():
             self.label_files_var.set(file)
         if status:
             self.label_status_var.set(status)
-            print("status", status)
+            print("\n>> ", status)
         if contains(self.label_status_var.get().lower(), ["ready", "finish"]):
             self.label_status.configure(background=rgbtohex(180, 230, 180))
         elif contains(self.label_status_var.get().lower(), ["error", "interr", "stop", "no file"]):
@@ -1049,7 +1082,9 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    #x = np.zeros((400, 600, 3))
-    #print(order_axes(x, type='DHW').shape)
-
+    # x = 5
+    # y = 5
+    # x_, y_ = to_centersystem(x, y, 10, 10)
+    # print(x_, y_)
+    # print(to_cornersystem(x_, y_, 10, 10, quadrant=4))
 
