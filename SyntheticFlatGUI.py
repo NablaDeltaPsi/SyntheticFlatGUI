@@ -21,8 +21,7 @@ VERSION = '1.4'
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100  # should be larger than 16 bit (65536)
-DERIVE_RAD = True
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
 TIFTYPES = ['tif', 'tiff']
@@ -314,14 +313,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
     # match profile to output size
     maxrad_this = dist_from_center(0, 0, height, width)
 
-    # set kmax for reusing radii
-    if DERIVE_RAD:
-        kmax = int(height / 2)
-    else:
-        kmax = 2
-
     # iterate one quadrant and write pixels in all four
-    # height = 10 -> iterate di from 0 to 4
     for di in range(halfheight):
         for dj in range(halfwidth):
 
@@ -340,28 +332,11 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
             r_index = int((RADIAL_RESOLUTION - 1) * r)
 
             # write pixel brightness in all quadrants
-            # since the radii of the multiples are already known, use them here (r_index * k)
+            # need to go to centersystem to calculate position in other quadrants
             di_, dj_ = to_centersystem(i, j, height, width)
-            for k in range(1, kmax):
-                k_di_ = di_ * k
-                k_dj_ = dj_ * k
-                k_r_index = r_index * k
-
-                # doesn't work for integer positions in centersystem
-                if k_di_.is_integer() or k_dj_.is_integer():
-                    continue
-
-                if k_di_ < halfheight and k_dj_ < halfwidth:
-                    for q in range(4):
-                        k_i, k_j = to_cornersystem(k_di_, k_dj_, height, width, quadrant=q)
-                        if not im_syn[k_i, k_j] == 0:
-                            print("Already written", di, dj, di_, dj_, k_di_, k_dj_, q, k_i, k_j, sep=' ')
-                            sys.exit()
-                        else:
-                            print("Write pixel    ", di, dj, di_, dj_, k_di_, k_dj_, q, k_i, k_j, sep=' ')
-                        write_flat_pixel(im_syn, rad_profile, grey_flat, k_r_index, k_i, k_j)
-                else:
-                    break
+            for q in range(4):
+                q_i, q_j = to_cornersystem(di_, dj_, height, width, quadrant=q)
+                write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, q_i, q_j)
 
     # convert to 16 bit
     im_syn = im_syn / np.max(im_syn)
