@@ -320,9 +320,6 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
     else:
         kmax = 2
 
-    # print error only once
-    printed_error = False
-
     # iterate one quadrant and write pixels in all four
     # height = 10 -> iterate di from 0 to 4
     for di in range(halfheight):
@@ -349,15 +346,19 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
                 k_di_ = di_ * k
                 k_dj_ = dj_ * k
                 k_r_index = r_index * k
+
+                # doesn't work for integer positions in centersystem
+                if k_di_.is_integer() or k_dj_.is_integer():
+                    continue
+
                 if k_di_ < halfheight and k_dj_ < halfwidth:
                     for q in range(4):
-                        k_i, k_j = to_cornersystem(k_di_, k_dj_, height, width, quadrant=q+1)
-                        # check already written
-                        if not im_syn[k_i, k_j] == 0 and not printed_error:
-                            print("Pixel already written!")
-                            print("x:", di_, "*", k, "=", k_di_, "->", k_i)
-                            print("y:", dj_, "*", k, "=", k_dj_, "->", k_j)
-                            printed_error = True
+                        k_i, k_j = to_cornersystem(k_di_, k_dj_, height, width, quadrant=q)
+                        if not im_syn[k_i, k_j] == 0:
+                            print("Already written", di, dj, di_, dj_, k_di_, k_dj_, q, k_i, k_j, sep=' ')
+                            sys.exit()
+                        else:
+                            print("Write pixel    ", di, dj, di_, dj_, k_di_, k_dj_, q, k_i, k_j, sep=' ')
                         write_flat_pixel(im_syn, rad_profile, grey_flat, k_r_index, k_i, k_j)
                 else:
                     break
@@ -486,21 +487,18 @@ def to_centersystem(x, y, height, width):
 def to_cornersystem(x_, y_, height, width, quadrant=0):
     x = height / 2 - 0.5
     y = width  / 2 - 0.5
-    if quadrant in [0,2]:
+    if quadrant == 0: # bottom right with positive x_ and y_
         x += x_
         y += y_
-    elif quadrant == 1: # top right with positive x_ and y_
-        x += x_
-        y -= y_
-    elif quadrant == 3:
+    elif quadrant == 1:
         x -= x_
         y += y_
-    elif quadrant == 4:
+    elif quadrant == 3:
         x -= x_
         y -= y_
     else:
         x += x_
-        y += y_
+        y -= y_
     return int(x), int(y)
 
 def dist_from_center(i, j, height, width, centersystem=False):
@@ -1112,9 +1110,6 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    # x = 5
-    # y = 5
-    # x_, y_ = to_centersystem(x, y, 10, 10)
-    # print(x_, y_)
-    # print(to_cornersystem(x_, y_, 10, 10, quadrant=4))
+    # for q in range(4):
+    #     print(to_cornersystem(1.0, 1.0, 10, 10, quadrant=q))
 
