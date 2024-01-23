@@ -22,6 +22,7 @@ IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
 RADIAL_RESOLUTION = 100  # should be larger than 16 bit (65536)
 DERIVE_RAD = True
+DEBUG_MODE = True
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
 TIFTYPES = ['tif', 'tiff']
@@ -577,10 +578,11 @@ def write_csv(data, savepath, original_file, suffix):
 
 # IMAGE CLASS =====================================================
 class Image():
-    def __init__(self, file):
+    def __init__(self, file, debug=False):
 
         # init attributes
         self.file = file
+        self.debug = debug
         self.image = None
         self.header = ''
         self.origpath = os.path.dirname(file)
@@ -596,6 +598,7 @@ class Image():
         self.image_flat = None
 
         self.set_outpaths()
+        self.set_debug()
 
     def set_outpaths(self):
         self.outpath = create_folder(self.origpath + os.sep + GUINAME)
@@ -616,12 +619,28 @@ class Image():
         else:
             self.origdebayer = False
 
+    def set_debug(self):
+        if not self.debug:
+            return
+        self.image = np.ones((200, 300, 4))
+        self.origshape = (400, 600)
+        self.set_origdebayer()
+        self.outtype = 'tif'
+        radprof_x = np.linspace(0, 1, RADIAL_RESOLUTION)
+        radprof_y = np.linspace(1, 0.7, RADIAL_RESOLUTION)
+        self.radprof = np.column_stack((radprof_x, radprof_y, radprof_y, radprof_y))
+        self.image_flat = np.ones((200, 300, 4))
+
     def load(self):
+        if self.debug:
+            return
         self.image, self.origshape, self.header = load_image(self.file, self.outpath_pickle)
         self.set_outtype()
         self.set_origdebayer()
 
     def write_pickle(self):
+        if self.debug:
+            return
         # without 190 MB, 0 min
         # gzip     30 MB, 3 min
         # lzma     20 MB, 3 min
@@ -666,16 +685,24 @@ class Image():
             cv2.imwrite(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + ".tif", image_write)
 
     def gradcorr(self, resolution_factor):
+        if self.debug:
+            return
         self.image = corr_gradient(self.image, resolution_factor=resolution_factor)
 
     def subtract_bias(self, bias_value):
+        if self.debug:
+            return
         self.image = self.image - bias_value
 
     def calc_histogram(self, circular=False):
+        if self.debug:
+            return
         data = calc_histograms(self.image, circular=circular)
         write_csv(data, self.outpath_csv, self.file, "_histogram")
 
     def calc_rad_profile(self, statistics=2, extrapolate_max=True, resolution_factor=4):
+        if self.debug:
+            return
         radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(self.image, statistics=statistics, extrapolate_max=extrapolate_max, resolution_factor=resolution_factor)
         write_csv(radprof1, self.outpath_csv, self.file, "_radprof_0_raw_mean")
         write_csv(radprof2, self.outpath_csv, self.file, "_radprof_1_clipped")
@@ -998,7 +1025,10 @@ class NewGUI():
 
                 # load
                 self.update_labels(status="load...")
-                imobj = Image(file)
+                if DEBUG_MODE:
+                    imobj = Image(file, debug=True)
+                else:
+                    imobj = Image(file)
                 imobj.load()
                 if self.check_stop(): return
 
