@@ -15,12 +15,12 @@ import datetime as dt
 from astropy.io import fits
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.4'
+VERSION = '1.4.beta'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
-RADIAL_RESOLUTION = 100  # should be larger than 16 bit (65536)
+RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
 DEBUG_MODE = False
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
@@ -156,6 +156,9 @@ def calc_histograms(image, circular=False):
 
 
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
+
+    # image is required to have depth 4!!
+    # always returns depth 3
 
     # measure time
     start = dt.datetime.now()
@@ -295,16 +298,24 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     return rad_profile_raw_mean, rad_profile, rad_profile_cut, rad_profile_smoothed
 
 
-def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
+def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
+
+    # write debayered or not?
+    if len(out_size) >= 3:
+        depth = out_size[2]
+        if depth != 3:
+            raise ValueError("Synthflat should have depth 3 or none!!")
+    else:
+        depth = 0
 
     # measure time
     start = dt.datetime.now()
 
     # initialize image
-    height, width = sorted(tif_size[:2])
+    height, width = out_size[:2]
     halfheight = int(height / 2)
     halfwidth = int(width / 2)
-    im_syn = np.zeros((int(height), int(width)))
+    im_syn = np.zeros(out_size)
 
     # normalize (again)
     for c in range(3):
@@ -322,8 +333,12 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, tif_size=(4024, 6024)):
             j = halfwidth + dj
 
             # check already written
-            if not im_syn[i, j] == 0:
-                continue
+            if depth > 0:
+                if not im_syn[i, j, 0] == 0:
+                    continue
+            else:
+                if not im_syn[i, j] == 0:
+                    continue
 
             # radial position of pixel
             r = dist_from_center(i, j, height, width) / maxrad_this
@@ -384,20 +399,35 @@ def separate_axes(image):
     return image_axes, color_axis
 
 def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
-    i = int(i)
-    j = int(j)
+
+    # write debayered or not?
+    if len(im_syn.shape) >= 3:
+        depth = im_syn.shape[2]
+        if depth != 3:
+            raise ValueError("Synthflat should have depth 3 or none!!")
+    else:
+        depth = 0
+
     # calculate brightness and set new image pixel
     if grey_flat:
-        im_syn[i, j] = rad_profile[r_index, 2]
+        if depth > 0:
+            for d in range(depth):
+                im_syn[i, j, d] = rad_profile[r_index, 2]
+        else:
+            im_syn[i, j] = rad_profile[r_index, 2]
     else:
-        if i % 2 == 0 and j % 2 == 0:  # links oben
-            im_syn[i, j] = rad_profile[r_index, 1]  # R
-        if i % 2 == 0 and j % 2 == 1:  # rechts oben
-            im_syn[i, j] = rad_profile[r_index, 2]  # G
-        if i % 2 == 1 and j % 2 == 0:  # links unten
-            im_syn[i, j] = rad_profile[r_index, 2]  # G
-        if i % 2 == 1 and j % 2 == 1:  # rechts unten
-            im_syn[i, j] = rad_profile[r_index, 3]  # B
+        if depth > 0:
+            for d in range(depth):
+                im_syn[i, j, d] = rad_profile[r_index, d + 1]
+        else:
+            if i % 2 == 0 and j % 2 == 0:  # links oben
+                im_syn[i, j] = rad_profile[r_index, 1]  # R
+            if i % 2 == 0 and j % 2 == 1:  # rechts oben
+                im_syn[i, j] = rad_profile[r_index, 2]  # G
+            if i % 2 == 1 and j % 2 == 0:  # links unten
+                im_syn[i, j] = rad_profile[r_index, 2]  # G
+            if i % 2 == 1 and j % 2 == 1:  # rechts unten
+                im_syn[i, j] = rad_profile[r_index, 3]  # B
 
 
 def debayer(image, separate_green=True):
@@ -570,8 +600,26 @@ class Image():
         self.radprof = None
         self.image_flat = None
 
-        self.set_outpaths()
+        self.set_paths_types()
         self.set_debug()
+
+    def set_debug(self):
+        if not self.debug:
+            return
+        self.file = self.file.split('.')[0] + '.tif' # fake some ending
+        self.image = np.ones((400, 600, 3))
+        self.origshape = (400, 600, 3)
+        radprof_x = np.linspace(0, 1, RADIAL_RESOLUTION)
+        radprof_y = np.linspace(1, 0.7, RADIAL_RESOLUTION)
+        self.radprof = np.column_stack((radprof_x, radprof_y, radprof_y, radprof_y))
+        self.set_paths_types()
+
+    def set_paths_types(self):
+        self.origpath = os.path.dirname(self.file)
+        self.origtype = os.path.basename(self.file).split(".")[1].lower()
+        self.set_outpaths()
+        self.set_outtype()
+        self.set_origdebayer()
 
     def set_outpaths(self):
         self.outpath = create_folder(self.origpath + os.sep + GUINAME)
@@ -579,6 +627,8 @@ class Image():
         self.outpath_csv = create_folder(self.outpath + os.sep + "csv")
 
     def set_outtype(self):
+        if not self.origtype:
+            return
         if self.origtype in RAWTYPES:
             self.outtype = 'tif'
         elif self.origtype in TIFTYPES:
@@ -587,29 +637,18 @@ class Image():
             self.outtype = 'fit'
 
     def set_origdebayer(self):
+        if self.origshape is None:
+            return
         if len(self.origshape) >= 3:
             self.origdebayer = True
         else:
             self.origdebayer = False
 
-    def set_debug(self):
-        if not self.debug:
-            return
-        self.image = np.ones((200, 300, 4))
-        self.origshape = (400, 600)
-        self.set_origdebayer()
-        self.outtype = 'tif'
-        radprof_x = np.linspace(0, 1, RADIAL_RESOLUTION)
-        radprof_y = np.linspace(1, 0.7, RADIAL_RESOLUTION)
-        self.radprof = np.column_stack((radprof_x, radprof_y, radprof_y, radprof_y))
-        self.image_flat = np.ones((200, 300, 4))
-
     def load(self):
         if self.debug:
             return
         self.image, self.origshape, self.header = load_image(self.file, self.outpath_pickle)
-        self.set_outtype()
-        self.set_origdebayer()
+        self.set_paths_types()
 
     def write_pickle(self):
         if self.debug:
@@ -684,8 +723,8 @@ class Image():
         self.radprof = radprof4
 
     def calc_synthetic_flat(self, grey_flat=False):
-        self.image_flat = calc_synthetic_flat(self.radprof, grey_flat=grey_flat, tif_size=self.origshape)
-        self.image = bayer(self.image) / self.image_flat
+        self.image_flat = calc_synthetic_flat(self.radprof, grey_flat=grey_flat, out_size=self.origshape)
+        #self.image = bayer(self.image) / self.image_flat
 
 
 # TKINTER CLASS =====================================================
