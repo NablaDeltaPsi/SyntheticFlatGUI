@@ -73,36 +73,35 @@ def load_image(file, picklepath):
         im_deb = order_axes(im_load, type='HWD')
         print("ordered shape: ", im_deb.shape)
 
-        # debayer, if necessary
+        # check depth (0 or 3) and debayer, if depth is 0
         if len(im_deb.shape) == 3:
+            if not im_deb.shape[2] == 3:
+                raise ValueError('Bad input shape')
             print("no need to debayer ...")
         elif len(im_deb.shape) == 2:
             print("debayer ...")
-            im_deb = debayer(im_load)
+            im_deb = debayer(im_load, separate_green=False) # returns depth 3!
         else:
             raise ValueError('Bad input shape')
         print("debayered shape: ", im_deb.shape)
 
-        for c in range(im_deb.shape[2]):
-            cpx_x = int(im_deb.shape[0] / 2)
-            cpx_y = int(im_deb.shape[1] / 2)
-            print(im_deb[cpx_x-1:cpx_x+1,cpx_y-1:cpx_y+1,c])
-
+    print("median:", np.median(im_deb))
+    print("max:", np.max(im_deb))
     return im_deb, origshape, header
 
 
 def corr_gradient(image, resolution_factor=4):
     # measure slopes
-    height, width, colors = image.shape
+    height, width, depth = image.shape
     slopes_x = []
     slopes_y = []
-    for c in range(colors):
+    for d in range(depth):
         rowmeans = []
         for row in range(height):
             if row < IGNORE_EDGE or row > height - IGNORE_EDGE:
                 continue
             if row % resolution_factor == 0:
-                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:-IGNORE_EDGE,c], low=2, high=2)[0]))
+                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:-IGNORE_EDGE, d], low=2, high=2)[0]))
         slope_y = np.mean(np.diff(rowmeans)) * height / resolution_factor
         slopes_y.append(slope_y)
 
@@ -111,7 +110,7 @@ def corr_gradient(image, resolution_factor=4):
             if col < IGNORE_EDGE or col > width - IGNORE_EDGE:
                 continue
             if col % resolution_factor == 0:
-                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:-IGNORE_EDGE,col,c], low=2, high=2)[0]))
+                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:-IGNORE_EDGE,col, d], low=2, high=2)[0]))
         slope_x = np.mean(np.diff(colmeans)) * width / resolution_factor
         slopes_x.append(slope_x)
 
@@ -119,7 +118,7 @@ def corr_gradient(image, resolution_factor=4):
         y = np.linspace(0, 1, height)
         X, Y = np.meshgrid(x, y)
         gradient = X * slope_x + Y * slope_y - (slope_x + slope_y) / 2
-        image[:, :, c] = image[:, :, c] - gradient
+        image[:, :, d] = image[:, :, d] - gradient
 
     # print
     print("gradient slopes x: ", slopes_x)
@@ -132,24 +131,24 @@ def calc_histograms(image, circular=False):
     image_rgb = merge_green(image)
     height = image_rgb.shape[0]
     width = image_rgb.shape[1]
-    for c in range(3):
+    for d in range(3):
         if circular:
             for i in range(image_rgb.shape[0]):
                 for j in range(image_rgb.shape[1]):
                     thisdist = dist_from_center(i, j, height, width)
                     if thisdist > image_rgb.shape[0] / 2 or thisdist > image_rgb.shape[1] / 2:
-                        image_rgb[i, j, c] = np.nan
+                        image_rgb[i, j, d] = np.nan
 
-        if c == 1:
+        if d == 1:
             vals = np.append(image_rgb[:, :, 1], image_rgb[:, :, 2])
         else:
-            vals = image_rgb[:, :, c]
+            vals = image_rgb[:, :, d]
         vals = vals.flatten()
 
         # caLculate histogram
         counts, bins = np.histogram(vals, np.linspace(0, 2 ** 12, 2 ** 8))
         bins = bins[1:]
-        if c == 0:
+        if d == 0:
             data = bins
         data = np.column_stack((data, counts))
     return data
@@ -157,8 +156,7 @@ def calc_histograms(image, circular=False):
 
 def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_factor=4):
 
-    # image is required to have depth 4!!
-    # always returns depth 3
+    # image is required to have depth 3 and function always returns depth 3!!
 
     # measure time
     start = dt.datetime.now()
@@ -171,7 +169,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     for i in range(image_height):
         for j in range(image_width):
             rad = int(dist_from_center(i, j, image_height, image_width))
-            if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0 and image[i, j, 3] > 0):
+            if not (image[i, j, 0] > 0 and image[i, j, 1] > 0 and image[i, j, 2] > 0):
                 continue
             if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
                 continue
@@ -182,8 +180,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
                 rad_counts[rad] = [[], [], []]
             rad_counts[rad][0].append(image[i, j, 0])
             rad_counts[rad][1].append(image[i, j, 1])
-            rad_counts[rad][1].append(image[i, j, 2])
-            rad_counts[rad][2].append(image[i, j, 3])
+            rad_counts[rad][2].append(image[i, j, 2])
     maxrad = dist_from_center(0, 0, image_height, image_width)
     rad_profile = np.zeros((len(radii), 4))
     rad_profile_raw_mean = np.zeros((len(radii), 4))
@@ -217,8 +214,8 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # cut data inside maximum
     if extrapolate_max:
         maxind = []
-        for c in range(3):
-            this_filtered = rad_profile_cut[:, c + 1]
+        for d in range(3):
+            this_filtered = rad_profile_cut[:, d + 1]
             this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 10),
                                                        polyorder=2, mode='interp')
             this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 5),
@@ -230,16 +227,16 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
             print("maximum index too large -> skip maximum cut")
         else:
             rad_profile_cut = rad_profile_cut[max(maxind):, :]
-        # for c in range(3):
-        #     rad_profile_cut[:min_maxind,c+1] = max(rad_profile_cut[:,c+1])
+        # for d in range(3):
+        #     rad_profile_cut[:min_maxind,d+1] = max(rad_profile_cut[:, d+1])
 
     # smooth data and interpolate
     radii = np.linspace(0, 1, RADIAL_RESOLUTION)
     rad_profile_smoothed = radii
     slopes_inner = []
     slopes_outer = []
-    for c in range(3):
-        y_new = savgol_filter(rad_profile_cut[:, c + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10), polyorder=2, mode='interp')
+    for d in range(3):
+        y_new = savgol_filter(rad_profile_cut[:, d + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10), polyorder=2, mode='interp')
         y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2, mode='interp')
 
         # extrapolate inner
@@ -282,11 +279,11 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     print("extrapolated with outer slopes: ", slopes_outer)
 
     # normalize by smoothed curve
-    for c in range(3):
-        rad_profile_raw_mean[:, c + 1] = rad_profile_raw_mean[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
-        rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
-        rad_profile_cut[:, c + 1] = rad_profile_cut[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
-        rad_profile_smoothed[:, c + 1] = rad_profile_smoothed[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
+    for d in range(3):
+        rad_profile_raw_mean[:, d + 1] = rad_profile_raw_mean[:, d + 1] / np.max(rad_profile_smoothed[:, d + 1])
+        rad_profile[:, d + 1] = rad_profile[:, d + 1] / np.max(rad_profile_smoothed[:, d + 1])
+        rad_profile_cut[:, d + 1] = rad_profile_cut[:, d + 1] / np.max(rad_profile_smoothed[:, d + 1])
+        rad_profile_smoothed[:, d + 1] = rad_profile_smoothed[:, d + 1] / np.max(rad_profile_smoothed[:, d + 1])
 
     # print minimum value
     print("minimum:", np.min(rad_profile_smoothed[:, 1:]))
@@ -318,8 +315,8 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
     im_syn = np.zeros(out_size)
 
     # normalize (again)
-    for c in range(3):
-        rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
+    for d in range(3):
+        rad_profile[:, d + 1] = rad_profile[:, d + 1] / np.max(rad_profile[:, d + 1])
 
     # match profile to output size
     maxrad_this = dist_from_center(0, 0, height, width)
@@ -383,20 +380,20 @@ def order_axes(image, type='HWD'):
 
 def separate_axes(image):
     # try to find a rgb dimension
-    color_axis = None
+    depth_axis = None
     for d in range(len(image.shape)):
         if image.shape[d] < 5:
-            color_axis = d
+            depth_axis = d
             break
 
     # calc tuple of image_axes
     image_axes = []
     for d in range(len(image.shape)):
-        if not d == color_axis:
+        if not d == depth_axis:
             image_axes.append(d)
     image_axes = tuple(image_axes)
 
-    return image_axes, color_axis
+    return image_axes, depth_axis
 
 def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
 
@@ -463,26 +460,26 @@ def bayer(image):
         return image
     rows = image.shape[0]
     cols = image.shape[1]
-    colors = image.shape[2]
+    depth = image.shape[2]
     b_image = np.zeros((rows * 2, cols * 2))
     for i in range(rows):
         for j in range(cols):
-            for c in range(colors):
-                if c == 0:  # R
-                    b_image[2 * i + 0, 2 * j + 0] = image[i, j, c]  # links oben
-                elif c == 1:  # G
-                    b_image[2 * i + 1, 2 * j + 0] = image[i, j, c]  # rechts oben
-                    if colors == 3:
-                        b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
-                elif c == 3:  # G
-                    b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
+            for d in range(depth):
+                if d == 0:  # R
+                    b_image[2 * i + 0, 2 * j + 0] = image[i, j, d]  # links oben
+                elif d == 1:  # G
+                    b_image[2 * i + 1, 2 * j + 0] = image[i, j, d]  # rechts oben
+                    if depth == 3:
+                        b_image[2 * i + 0, 2 * j + 1] = image[i, j, d]  # links unten
+                elif d == 3:  # G
+                    b_image[2 * i + 0, 2 * j + 1] = image[i, j, d]  # links unten
                 else:  # B
-                    b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
+                    b_image[2 * i + 1, 2 * j + 1] = image[i, j, d]  # rechts unten
     return b_image
 
 
 def to_centersystem(x, y, height, width):
-    # index at half height is actually not center but 0.5 off
+    # index at half height is actually not denter but 0.5 off
     # pixel 4 and 5 both are at radius 0.5 for an array with length 10
     x_ = x - height / 2 + 0.5
     y_ = y - width  / 2 + 0.5
@@ -591,12 +588,11 @@ class Image():
         self.origpath = os.path.dirname(file)
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
         self.origshape = None
-        self.origdebayer = None
+        self.origmax = -1
         self.outpath = ''
         self.outpath_pickle = ''
         self.outpath_csv = ''
         self.outtype = ''
-        self.outdebayer = None
         self.radprof = None
         self.image_flat = None
 
@@ -619,7 +615,7 @@ class Image():
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
         self.set_outpaths()
         self.set_outtype()
-        self.set_origdebayer()
+        self.set_origmax()
 
     def set_outpaths(self):
         self.outpath = create_folder(self.origpath + os.sep + GUINAME)
@@ -636,13 +632,11 @@ class Image():
         else:
             self.outtype = 'fit'
 
-    def set_origdebayer(self):
-        if self.origshape is None:
-            return
-        if len(self.origshape) >= 3:
-            self.origdebayer = True
+    def set_origmax(self):
+        if self.image is not None:
+            return np.max(self.image)
         else:
-            self.origdebayer = False
+            return -1
 
     def load(self):
         if self.debug:
@@ -668,12 +662,6 @@ class Image():
     def write_image(self, suffix, flat=False):
         print("write image \"", suffix, "\"")
 
-        # determine case
-        if len(self.origshape) >= 3 and not self.origtype in RAWTYPES:
-            self.outdebayer = True
-        else:
-            self.outdebayer = False
-
         if flat:
             print("input", self.image_flat.shape)
             image_write = self.image_flat
@@ -681,18 +669,16 @@ class Image():
             print("input", self.image.shape)
             image_write = self.image
 
-        # reformat
-        if self.outdebayer:
-            # use as is
-            image_write = image_write
-        else:
-            # bayer image, if it is debayered
+        # the image is certainly debayered now
+        # -> if original was bayered, bayer it again before writing
+        if len(self.origshape) == 2:
             image_write = bayer(image_write)
         print("output", image_write.shape)
 
         # write
-        if self.outtype == 'tif':
+        if self.origtype in RAWTYPES:
             image_write = np.float32(image_write / np.max(image_write))
+        if self.outtype in TIFTYPES:
             print(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + ".tif")
             cv2.imwrite(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + ".tif", image_write)
 
