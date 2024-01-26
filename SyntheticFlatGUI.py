@@ -30,6 +30,10 @@ FILETYPES = RAWTYPES + TIFTYPES + FITSTYPES + OTHERTYPES
 
 # STATIC MAJOR FUNCTIONS =====================================================
 def load_image(file, picklepath):
+
+    # measure time
+    start = dt.datetime.now()
+
     print("")
     print(file)
     if not os.path.isfile(file):
@@ -43,9 +47,6 @@ def load_image(file, picklepath):
     except:
         # no pickle file found
         print("no success.")
-
-        # measure time
-        start = dt.datetime.now()
 
         # load image depending on type
         imagetype = os.path.basename(file).split(".")[1].lower()
@@ -69,6 +70,7 @@ def load_image(file, picklepath):
         # remember original shape
         origshape = im_load.shape
         print_image_info(im_load)
+        im_load = set_depth(im_load)
 
         # order axes
         im_deb = order_axes(im_load, type='HWD')
@@ -82,11 +84,12 @@ def load_image(file, picklepath):
         else:
             raise ValueError('Bad input shape')
 
-        # print execution time
-        stop = dt.datetime.now()
-        print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
-
     print_image_info(im_deb)
+
+    # print execution time
+    stop = dt.datetime.now()
+    print("execution time:", int((stop - start).total_seconds() + 0.5), "seconds")
+
     return im_deb, origshape, header
 
 
@@ -130,6 +133,7 @@ def corr_gradient(image, resolution_factor=4):
         gradient = X * slopes_x[c] + Y * slopes_y[c] - (slopes_x[c] + slopes_y[c]) / 2
         image[:, :, c] = image[:, :, c] - gradient
 
+    image = set_depth(image)
     print_image_info(image)
     return image
 
@@ -353,6 +357,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
     stop = dt.datetime.now()
     print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
 
+    im_syn = set_depth(im_syn)
     print_image_info(im_syn)
     return im_syn
 
@@ -392,6 +397,11 @@ def separate_axes(image):
 
     return image_axes, color_axis
 
+def set_depth(image):
+    if np.max(image) > 1:
+        return image.astype(np.uint16)
+    else:
+        return image.astype(np.float32)
 
 def debayer(image):
     rows = image.shape[0]
@@ -407,7 +417,7 @@ def debayer(image):
                 db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = image[n, m]  # G
             else:  # rechts unten
                 db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = image[n, m]  # B
-    return db_image
+    return set_depth(db_image)
 
 
 def bayer(image, keep_size=False):
@@ -448,7 +458,7 @@ def bayer(image, keep_size=False):
                         b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
                     else:  # B
                         b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
-    return b_image
+    return set_depth(b_image)
 
 
 def calc_centerdist_map(shape):
@@ -532,7 +542,6 @@ class Image():
         self.origpath = os.path.dirname(file)
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
         self.origshape = None
-        self.origmax = -1
         self.outpath = ''
         self.outpath_pickle = ''
         self.outpath_csv = ''
@@ -540,7 +549,12 @@ class Image():
         self.radprof = None
         self.image_flat = None
 
-        self.set_paths_types()
+        # set paths
+        self.origpath = os.path.dirname(self.file)
+        self.outpath = create_folder(self.origpath + os.sep + GUINAME)
+        self.outpath_pickle = create_folder(self.outpath + os.sep + "pickle")
+        self.outpath_csv = create_folder(self.outpath + os.sep + "csv")
+
         self.set_debug()
 
     def set_debug(self):
@@ -554,37 +568,17 @@ class Image():
         self.radprof = np.column_stack((radprof_x, radprof_y, radprof_y, radprof_y))
         self.set_paths_types()
 
-    def set_paths_types(self):
-        self.origpath = os.path.dirname(self.file)
-        self.origtype = os.path.basename(self.file).split(".")[1].lower()
-        self.set_outpaths()
-        self.set_outtype()
-        self.set_origmax()
-
-    def set_outpaths(self):
-        self.outpath = create_folder(self.origpath + os.sep + GUINAME)
-        self.outpath_pickle = create_folder(self.outpath + os.sep + "pickle")
-        self.outpath_csv = create_folder(self.outpath + os.sep + "csv")
-
-    def set_outtype(self):
-        if not self.origtype:
-            return
-        if self.origtype in RAWTYPES + TIFTYPES + FITSTYPES:
-            self.outtype = 'tif'
-        else:
-            self.outtype = self.origtype
-
-    def set_origmax(self):
-        if self.image is not None:
-            return np.max(self.image)
-        else:
-            return -1
-
     def load(self):
         if self.debug:
             return
         self.image, self.origshape, self.header = load_image(self.file, self.outpath_pickle)
-        self.set_paths_types()
+
+        # origtype, outtype
+        self.origtype = os.path.basename(self.file).split(".")[1].lower()
+        if self.origtype in RAWTYPES + TIFTYPES + FITSTYPES:
+            self.outtype = 'tif'
+        else:
+            self.outtype = self.origtype
 
     def write_pickle(self):
         if self.debug:
@@ -615,11 +609,13 @@ class Image():
             image_write = bayer(image_write)
 
         # write
-        print_image_info(image_write)
-        if self.origtype in RAWTYPES:
-            image_write = np.float32(image_write / np.max(image_write))
+        # if self.origtype in RAWTYPES:
+        #     image_write = image_write / np.max(image_write)
         # else:
-        #     image_write = np.float32(image_write)
+        #     image_write = image_write
+        # image_write = ((2 ** 16 - 1) * image_write).astype(np.uint16)
+        image_write = np.float32(image_write)
+        print_image_info(image_write)
         print(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype)
         cv2.imwrite(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype, image_write)
 
@@ -668,8 +664,8 @@ class Image():
         if len(self.origshape) == 2:
             print("bayer input image (back)...")
             self.image = bayer(self.image)
-        # self.image_flat = ((2 ** 16 - 1) * self.image_flat).astype(np.uint16)
         self.image = self.image / self.image_flat
+        self.image = set_depth(self.image)
 
 
 # TKINTER CLASS =====================================================
@@ -1006,6 +1002,7 @@ class NewGUI():
                 # gradient
                 if self.opt_gradient.get():
                     self.update_labels(status="calc gradient...")
+                    imobj.gradcorr(resolution_factor)
                     imobj.gradcorr(resolution_factor)
                     if self.check_stop(): return
 
