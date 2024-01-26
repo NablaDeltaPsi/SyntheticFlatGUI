@@ -79,7 +79,7 @@ def load_image(file, picklepath):
             print("no need to debayer ...")
         elif len(im_deb.shape) == 2:
             print("debayer ...")
-            im_deb = debayer(im_load, separate_green=True) # returns 4 colors!
+            im_deb = debayer(im_load) # returns 4 colors!
         else:
             raise ValueError('Bad input shape')
 
@@ -136,14 +136,16 @@ def corr_gradient(image, resolution_factor=4):
 
 
 def calc_histograms(image, circular=False):
-    height = image.shape[0]
-    width = image.shape[1]
-    colors = image.shape[2]
+
+    # shape
+    height, width, colors = image.shape
+    centerdist_map = calc_centerdist_map(image.shape)
+
     for c in range(colors):
         if circular:
             for i in range(image.shape[0]):
                 for j in range(image.shape[1]):
-                    thisdist = dist_from_center(i, j, height, width)
+                    thisdist = centerdist_map[i, j]
                     if thisdist > image.shape[0] / 2 or thisdist > image.shape[1] / 2:
                         image[i, j, c] = np.nan
 
@@ -167,38 +169,39 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # measure time
     start = dt.datetime.now()
 
+    # shape
+    height, width, colors = image.shape
+    centerdist_map = calc_centerdist_map(image.shape)
+
     # acquire pixel values
-    image_height = image.shape[0]
-    image_width = image.shape[1]
-    image_colors = image.shape[2]
     radii = []
     rad_counts = {}
-    for i in range(image_height):
-        for j in range(image_width):
+    for i in range(height):
+        for j in range(width):
             if not (i % resolution_factor == 0 and j % resolution_factor == 0):
                 continue
-            if i < IGNORE_EDGE or j < IGNORE_EDGE or i > image_height-IGNORE_EDGE or j > image_width-IGNORE_EDGE:
+            if i < IGNORE_EDGE or j < IGNORE_EDGE or i > height-IGNORE_EDGE or j > width-IGNORE_EDGE:
                 continue
             if not np.min(image[i, j, :] > 0):
                 continue
-            rad = int(dist_from_center(i, j, image_height, image_width))
+            rad = int(centerdist_map[i, j])
             if not rad in radii:
                 radii.append(rad)
                 rad_counts[rad] = []
-                for c in range(image_colors):
+                for c in range(colors):
                     rad_counts[rad].append([])
-            for c in range(image_colors):
+            for c in range(colors):
                 rad_counts[rad][c].append(image[i, j, c])
-    maxrad = dist_from_center(0, 0, image_height, image_width)
-    rad_profile = np.zeros((len(radii), image_colors + 1))
-    rad_profile_raw_mean = np.zeros((len(radii), image_colors + 1))
+    maxrad = centerdist_map[0, 0]
+    rad_profile = np.zeros((len(radii), colors + 1))
+    rad_profile_raw_mean = np.zeros((len(radii), colors + 1))
     index = 0
     for rad in sorted(radii):
         rad_profile[index, 0] = rad / maxrad
-        for c in range(image_colors):
+        for c in range(colors):
             rad_profile[index, c + 1] = apply_statistics(rad_counts[rad][c], statistics)
         rad_profile_raw_mean[index, 0] = rad / maxrad
-        for c in range(image_colors):
+        for c in range(colors):
             rad_profile_raw_mean[index, c + 1] = np.mean(rad_counts[rad][c])
         index += 1
     rad_profile = rad_profile[~np.isnan(rad_profile).any(axis=1), :]
@@ -220,7 +223,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     # cut data inside maximum
     if extrapolate_max:
         maxind = []
-        for c in range(image_colors):
+        for c in range(colors):
             this_filtered = rad_profile_cut[:, c + 1]
             this_filtered = savgol_filter(this_filtered, window_length=odd_int(rad_profile_cut.shape[0] / 10),
                                                        polyorder=2, mode='interp')
@@ -239,7 +242,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     rad_profile_smoothed = radii
     slopes_inner = []
     slopes_outer = []
-    for c in range(image_colors):
+    for c in range(colors):
         y_new = savgol_filter(rad_profile_cut[:, c + 1], window_length=odd_int(rad_profile_cut.shape[0] / 10), polyorder=2, mode='interp')
         y_new = savgol_filter(y_new, window_length=odd_int(rad_profile_cut.shape[0] / 5), polyorder=2, mode='interp')
 
@@ -283,7 +286,7 @@ def calc_rad_profile(image, statistics=2, extrapolate_max=True, resolution_facto
     print("extrapolated with outer slopes: ", slopes_outer)
 
     # normalize by smoothed curve
-    for c in range(image_colors):
+    for c in range(colors):
         rad_profile_raw_mean[:, c + 1] = rad_profile_raw_mean[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
         rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
         rad_profile_cut[:, c + 1] = rad_profile_cut[:, c + 1] / np.max(rad_profile_smoothed[:, c + 1])
@@ -304,29 +307,27 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
     # measure time
     start = dt.datetime.now()
 
-    # initialize image
+    # shape
     height, width = out_size[:2]
-    im_syn = np.zeros(out_size)
+    centerdist_map = calc_centerdist_map(out_size)
+
+    # convert centerdist_map into indices of radial profile
+    r_indices = (RADIAL_RESOLUTION - 1) * centerdist_map / centerdist_map[0, 0]
+    r_indices = r_indices.astype(int)
 
     # normalize (again)
     for c in range(rad_profile.shape[1] - 1):
         rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
 
-    # match profile to output size
-    maxrad_this = dist_from_center(0, 0, height, width)
+    # initialize image
+    im_syn = np.zeros(out_size)
 
     # iterate image, determine radius and write flat pixels
     for i in range(height):
         for j in range(width):
 
-            # radial position of pixel
-            r = dist_from_center(i, j, height, width) / maxrad_this
-
-            # search match within small range in radial profile
-            r_index = int((RADIAL_RESOLUTION - 1) * r)
-
             # write pixel
-            write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j)
+            write_flat_pixel(im_syn, rad_profile, grey_flat, r_indices[i, j], i, j)
 
     print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
     print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
@@ -407,7 +408,7 @@ def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
                 im_syn[i, j] = rad_profile[r_index, 3]  # B
 
 
-def debayer(image, separate_green=True):
+def debayer(image):
     rows = image.shape[0]
     cols = image.shape[1]
     db_image = np.zeros((int(rows / 2), int(cols / 2), 4))
@@ -421,45 +422,8 @@ def debayer(image, separate_green=True):
                 db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = image[n, m]  # G
             if n % 2 == 1 and m % 2 == 1:  # rechts unten
                 db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = image[n, m]  # B
-    if not separate_green:
-        db_image = merge_green(db_image)
     return db_image
 
-
-def calc_mindist(array_):
-    array = list(set(array_.flatten()[:1000000]))[:100]
-    array.sort()
-    mindist = max(array)
-    for i in range(1,len(array)):
-        thisdist = array[i] - array[i-1]
-        if thisdist > 0 and thisdist < mindist:
-            mindist = thisdist
-    return mindist
-
-def set_green(a, b, mindist):
-    if a == b:
-        return a
-    else:
-        a, b = sorted([a, b])
-        valid_values = np.arange(a, b, mindist)
-        # search valid value that is the closest to the mean
-        ind = np.argmin(valid_values - (a + b)/2)
-        return valid_values[ind]
-
-def merge_green(image):
-    mindist = calc_mindist(image)
-    print("merge green with mindist:", mindist)
-    image_r = image[:, :, 0]
-    # depth should stay the same, therefore the two
-    # green values should be combined into another valid value
-    # e.g. if the image only has integers, we don't want to set the mean .5 values
-    image_g = np.zeros((image.shape[0], image.shape[1]))
-    for i in range(image.shape[0]):
-        for j in range(image.shape[1]):
-            image_g[i, j] = set_green(image[i, j, 1], image[i, j, 2], mindist)
-    image_b = image[:, :, 3]
-    image = np.stack((image_r, image_g, image_b), axis=2)
-    return image
 
 def bayer(image):
     if len(image.shape) < 3:
@@ -484,33 +448,15 @@ def bayer(image):
     return b_image
 
 
-def to_centersystem(x, y, height, width):
-    # index at half height is actually not center but 0.5 off
-    # pixel 4 and 5 both are at radius 0.5 for an array with length 10
-    x_ = x - height / 2 + 0.5
-    y_ = y - width  / 2 + 0.5
-    return x_, y_
-
-def to_cornersystem(x_, y_, height, width):
-    x = int(height / 2 - 0.5 + x_)
-    y = int(width  / 2 - 0.5 + y_)
-    return x, y
-
-def dist_from_center(i, j, height, width, centersystem=False):
-    if centersystem:
-        dx = i
-        dy = j
-    else:
-        dx, dy = to_centersystem(i, j, height, width)
-    dx = abs(dx)
-    dy = abs(dy)
-    #dx, dy = sorted([dx, dy])  # sort helps caching of symmetric function, but losing time...
-    return cached_dist(dx, dy)
-
-
-@lru_cache(maxsize=None)
-def cached_dist(dx, dy):
-    return math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
+def calc_centerdist_map(shape):
+    height, width = shape[:2]
+    xax = np.arange(width)
+    yax = np.arange(height)
+    X, Y = np.meshgrid(xax, yax)
+    X = X - width  / 2 + 0.5
+    Y = Y - height / 2 + 0.5
+    distances = np.sqrt(np.power(X, 2) + np.power(Y, 2))
+    return distances
 
 
 def create_folder(folder_path):
@@ -687,13 +633,21 @@ class Image():
     def calc_histogram(self, circular=False):
         if self.debug:
             return
-        data = calc_histograms(self.image, circular=circular)
+        data = calc_histograms(
+            self.image,
+            circular=circular,
+        )
         write_csv(data, self.outpath_csv, self.file, "_histogram")
 
     def calc_rad_profile(self, statistics=2, extrapolate_max=True, resolution_factor=4):
         if self.debug:
             return
-        radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(self.image, statistics=statistics, extrapolate_max=extrapolate_max, resolution_factor=resolution_factor)
+        radprof1, radprof2, radprof3, radprof4 = calc_rad_profile(
+            self.image,
+            statistics=statistics,
+            extrapolate_max=extrapolate_max,
+            resolution_factor=resolution_factor,
+        )
         write_csv(radprof1, self.outpath_csv, self.file, "_radprof_0_raw_mean")
         write_csv(radprof2, self.outpath_csv, self.file, "_radprof_1_clipped")
         write_csv(radprof3, self.outpath_csv, self.file, "_radprof_2_cut")
@@ -701,8 +655,15 @@ class Image():
         self.radprof = radprof4
 
     def calc_synthetic_flat(self, grey_flat=False):
-        self.image_flat = calc_synthetic_flat(self.radprof, grey_flat=grey_flat, out_size=self.origshape)
+        self.image_flat = calc_synthetic_flat(
+            self.radprof,
+            grey_flat=grey_flat,
+            out_size=self.origshape,
+        )
+
+    def apply_synthetic_flat(self):
         if len(self.origshape) == 2:
+            print("bayer input image (back)...")
             self.image = bayer(self.image)
         # self.image_flat = ((2 ** 16 - 1) * self.image_flat).astype(np.uint16)
         self.image = self.image / self.image_flat
@@ -976,6 +937,8 @@ class NewGUI():
             self.label_status.configure(background=rgbtohex(180, 230, 180))
         elif contains(self.label_status_var.get().lower(), ["error", "interr", "stop", "no file"]):
             self.label_status.configure(background=rgbtohex(250, 180, 180))
+        elif contains(self.label_status_var.get().lower(), ["write"]):
+            self.label_status.configure(background=rgbtohex(240, 230, 180))
         else:
             self.label_status.configure(background=rgbtohex(250, 220, 180))
         if len(self.loaded_files) > 0:
@@ -1081,13 +1044,15 @@ class NewGUI():
 
                     # correct input
                     if self.set_export_corr_input.get():
+                        self.update_labels(status="apply synthetic flat...")
+                        imobj.apply_synthetic_flat()
+                        if self.check_stop(): return
+
                         self.update_labels(status="write flatcorr...")
                         imobj.write_image("_3_flatcorr")
                         if self.check_stop(): return
 
                 self.update_labels(status="finished.")
-                print("cached_dist:", cached_dist.cache_info())
-                cached_dist.cache_clear()
                 print("Finished file.")
 
         except Exception as e:
@@ -1105,6 +1070,5 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    # for q in range(4):
-    #     print(to_cornersystem(1.0, 1.0, 10, 10, quadrant=q))
+    # print(calc_centerdist_map((4,6,3)))
 
