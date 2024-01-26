@@ -4,7 +4,7 @@ import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
 from configparser import ConfigParser
 import glob, os, sys, copy, numpy as np
-import cv2, pickle, bz2
+import cv2
 from rawpy import imread
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
@@ -29,7 +29,7 @@ OTHERTYPES = ['jpeg', 'jpg', 'png']
 FILETYPES = RAWTYPES + TIFTYPES + FITSTYPES + OTHERTYPES
 
 # STATIC MAJOR FUNCTIONS =====================================================
-def load_image(file, picklepath):
+def load_image(file):
 
     # measure time
     start = dt.datetime.now()
@@ -38,51 +38,42 @@ def load_image(file, picklepath):
     print(file)
     if not os.path.isfile(file):
         raise ValueError("File does not exist!\n\n")
-    try:
-        print("Search and read pickle files ... ", end='')
-        im_deb = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + ".pkl", 'rb'))
-        origshape = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_origshape.pkl", 'rb'))
-        header = pickle.load(bz2.BZ2File(picklepath + os.sep + os.path.basename(file).replace('.', '_') + "_header.pkl", 'rb'))
-        print("success.")
-    except:
-        # no pickle file found
-        print("no success.")
 
-        # load image depending on type
-        imagetype = os.path.basename(file).split(".")[1].lower()
-        header = ""
-        if imagetype in RAWTYPES:
-            print("read raw image (" + imagetype.upper() + ") ...")
-            im_load = imread(file).raw_image_visible
-        elif imagetype in TIFTYPES:
-            print("read tif type image (" + imagetype.upper() + ") ...")
-            im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
-        elif imagetype in FITSTYPES:
-            print("read fits type image (" + imagetype.upper() + ") ...")
-            im_load, header = fits.getdata(file, ext=0, header=True)
-            print(header)
-        elif imagetype in OTHERTYPES:
-            print("read other type image (" + imagetype.upper() + ") ...")
-            im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
-        else:
-            raise ValueError("image type not supported!!")
+    # load image depending on type
+    imagetype = os.path.basename(file).split(".")[1].lower()
+    header = ""
+    if imagetype in RAWTYPES:
+        print("read raw image (" + imagetype.upper() + ") ...")
+        im_load = imread(file).raw_image_visible
+    elif imagetype in TIFTYPES:
+        print("read tif type image (" + imagetype.upper() + ") ...")
+        im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
+    elif imagetype in FITSTYPES:
+        print("read fits type image (" + imagetype.upper() + ") ...")
+        im_load, header = fits.getdata(file, ext=0, header=True)
+        print(header)
+    elif imagetype in OTHERTYPES:
+        print("read other type image (" + imagetype.upper() + ") ...")
+        im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
+    else:
+        raise ValueError("image type not supported!!")
 
-        # remember original shape
-        origshape = im_load.shape
-        print_image_info(im_load)
-        im_load = set_depth(im_load)
+    # remember original shape
+    origshape = im_load.shape
+    print_image_info(im_load)
+    im_load = set_depth(im_load)
 
-        # order axes
-        im_deb = order_axes(im_load, type='HWD')
+    # order axes
+    im_deb = order_axes(im_load, type='HWD')
 
-        # check colors and debayer, if no colors
-        if len(im_deb.shape) == 3:
-            print("no need to debayer ...")
-        elif len(im_deb.shape) == 2:
-            print("debayer ...")
-            im_deb = debayer(im_load) # returns 4 colors!
-        else:
-            raise ValueError('Bad input shape')
+    # check colors and debayer, if no colors
+    if len(im_deb.shape) == 3:
+        print("no need to debayer ...")
+    elif len(im_deb.shape) == 2:
+        print("debayer ...")
+        im_deb = debayer(im_load) # returns 4 colors!
+    else:
+        raise ValueError('Bad input shape')
 
     print_image_info(im_deb)
 
@@ -140,26 +131,22 @@ def corr_gradient(image, resolution_factor=4):
 
 def calc_histograms(image, circular=False):
 
+    image = copy.deepcopy(image).astype(np.float16)
+
     # shape
     height, width, colors = image.shape
     centerdist_map = calc_centerdist_map(image.shape)
 
     for c in range(colors):
         if circular:
-            for i in range(image.shape[0]):
-                for j in range(image.shape[1]):
+            for i in range(height):
+                for j in range(width):
                     thisdist = centerdist_map[i, j]
-                    if thisdist > image.shape[0] / 2 or thisdist > image.shape[1] / 2:
+                    if thisdist > height / 2 or thisdist > width / 2:
                         image[i, j, c] = np.nan
 
-        if c == 1:
-            vals = np.append(image[:, :, 1], image[:, :, 2])
-        else:
-            vals = image[:, :, c]
-        vals = vals.flatten()
-
         # caLculate histogram
-        counts, bins = np.histogram(vals, np.linspace(0, 2 ** 12, 2 ** 8))
+        counts, bins = np.histogram(image[:, :, c].flatten(), np.linspace(0, 2 ** 12, 2 ** 8))
         bins = bins[1:]
         if c == 0:
             data = bins
@@ -407,16 +394,10 @@ def debayer(image):
     rows = image.shape[0]
     cols = image.shape[1]
     db_image = np.zeros((int(rows / 2), int(cols / 2), 4))
-    for n in range(rows):
-        for m in range(cols):
-            if n % 2 == 0 and m % 2 == 0:  # links oben
-                db_image[int((n + 0) / 2), int((m + 0) / 2), 0] = image[n, m]  # R
-            elif n % 2 == 0 and m % 2 == 1:  # rechts oben
-                db_image[int((n + 0) / 2), int((m - 1) / 2), 1] = image[n, m]  # G
-            elif n % 2 == 1 and m % 2 == 0:  # links unten
-                db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = image[n, m]  # G
-            else:  # rechts unten
-                db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = image[n, m]  # B
+    db_image[:,:,0] = image[0::2, 0::2]
+    db_image[:,:,1] = image[0::2, 1::2]
+    db_image[:,:,2] = image[1::2, 0::2]
+    db_image[:,:,3] = image[1::2, 1::2]
     return set_depth(db_image)
 
 
@@ -425,39 +406,23 @@ def bayer(image, keep_size=False):
         return image
     rows, cols, colors = image.shape
     print("bayer " + str(colors) + " colors image" + " (keep size)" * keep_size)
+    if colors == 3:
+        color_order = [0, 1, 1, 2]
+    else:
+        color_order = [0, 1, 2, 3]
     if keep_size:
         b_image = np.zeros((rows, cols))
-        for n in range(rows):
-            for m in range(cols):
-                if n % 2 == 0 and m % 2 == 0:  # links oben
-                    b_image[n, m] = image[n, m, 0]  # R
-                elif n % 2 == 0 and m % 2 == 1:  # rechts oben
-                    b_image[n, m] = image[n, m, 1]  # G
-                elif n % 2 == 1 and m % 2 == 0:  # links unten
-                    if colors == 3:
-                        b_image[n, m] = image[n, m, 1]  # G
-                    else:
-                        b_image[n, m] = image[n, m, 2]  # B
-                else:  # rechts unten
-                    if colors == 3:
-                        b_image[n, m] = image[n, m, 2]  # G
-                    else:
-                        b_image[n, m] = image[n, m, 3]  # B
+        b_image[0::2, 0::2] = image[0::2, 0::2, color_order[0]]
+        b_image[0::2, 1::2] = image[0::2, 1::2, color_order[1]]
+        b_image[1::2, 0::2] = image[1::2, 0::2, color_order[2]]
+        b_image[1::2, 1::2] = image[1::2, 1::2, color_order[3]]
     else:
         b_image = np.zeros((rows * 2, cols * 2))
-        for i in range(rows):
-            for j in range(cols):
-                for c in range(colors):
-                    if c == 0:  # R
-                        b_image[2 * i + 0, 2 * j + 0] = image[i, j, c]  # links oben
-                    elif c == 1:  # G
-                        b_image[2 * i + 1, 2 * j + 0] = image[i, j, c]  # rechts oben
-                        if colors == 3:
-                            b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
-                    elif c == 3:  # G
-                        b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
-                    else:  # B
-                        b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
+        b_image[0::2, 0::2] = image[:,:,color_order[0]]
+        b_image[0::2, 1::2] = image[:,:,color_order[1]]
+        b_image[1::2, 0::2] = image[:,:,color_order[2]]
+        b_image[1::2, 1::2] = image[:,:,color_order[3]]
+
     return set_depth(b_image)
 
 
@@ -543,7 +508,6 @@ class Image():
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
         self.origshape = None
         self.outpath = ''
-        self.outpath_pickle = ''
         self.outpath_csv = ''
         self.outtype = ''
         self.radprof = None
@@ -552,7 +516,6 @@ class Image():
         # set paths
         self.origpath = os.path.dirname(self.file)
         self.outpath = create_folder(self.origpath + os.sep + GUINAME)
-        self.outpath_pickle = create_folder(self.outpath + os.sep + "pickle")
         self.outpath_csv = create_folder(self.outpath + os.sep + "csv")
 
         self.set_debug()
@@ -571,7 +534,7 @@ class Image():
     def load(self):
         if self.debug:
             return
-        self.image, self.origshape, self.header = load_image(self.file, self.outpath_pickle)
+        self.image, self.origshape, self.header = load_image(self.file)
 
         # origtype, outtype
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
@@ -579,21 +542,6 @@ class Image():
             self.outtype = 'tif'
         else:
             self.outtype = self.origtype
-
-    def write_pickle(self):
-        if self.debug:
-            return
-        # without 190 MB, 0 min
-        # gzip     30 MB, 3 min
-        # lzma     20 MB, 3 min
-        # bz2      20 MB, 0 min <-- checked: pyinstaller size didnt increase
-        pickle_filename = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + ".pkl"
-        pickle_filename_origshape = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + "_origshape.pkl"
-        pickle_filename_header = self.outpath_pickle + os.sep + os.path.basename(self.file).replace('.', '_') + "_header.pkl"
-        if not os.path.isfile(pickle_filename) or not os.path.isfile(pickle_filename_origshape) or not os.path.isfile(pickle_filename_header):
-            pickle.dump(self.image, bz2.BZ2File(pickle_filename, 'wb'))
-            pickle.dump(self.origshape, bz2.BZ2File(pickle_filename_origshape, 'wb'))
-            pickle.dump(self.header, bz2.BZ2File(pickle_filename_header, 'wb'))
 
     def write_image(self, suffix, flat=False):
         print("write image \"", suffix, "\"")
@@ -709,12 +657,10 @@ class NewGUI():
 
         # settings
         settings = tk.Menu(menubar, tearoff=0)
-        self.set_write_pickle    = tk.BooleanVar()
         self.set_export_corr_input = tk.BooleanVar()
         self.set_circular_hist   = tk.BooleanVar()
         self.set_grey_flat       = tk.BooleanVar()
         self.set_extrapolate_max = tk.BooleanVar()
-        settings.add_checkbutton(label="Write pickle file", onvalue=1, offvalue=0, variable=self.set_write_pickle)
         settings.add_checkbutton(label="Histogram of largest circle", onvalue=1, offvalue=0, variable=self.set_circular_hist)
         settings.add_checkbutton(label="Extrapolate inside max", onvalue=1, offvalue=0, variable=self.set_extrapolate_max)
         settings.add_checkbutton(label="Export corrected input images", onvalue=1, offvalue=0, variable=self.set_export_corr_input)
@@ -815,7 +761,6 @@ class NewGUI():
         config_object["OPTIONS"]["opt_synthflat"] = str(self.opt_synthflat.get())
 
         config_object["SETTINGS"] = {}
-        config_object["SETTINGS"]["set_write_pickle"]     = str(self.set_write_pickle.get())
         config_object["SETTINGS"]["set_export_corr_input"]  = str(self.set_export_corr_input.get())
         config_object["SETTINGS"]["set_circular_hist"]    = str(self.set_circular_hist.get())
         config_object["SETTINGS"]["set_grey_flat"]        = str(self.set_grey_flat.get())
@@ -845,7 +790,6 @@ class NewGUI():
         config_object["OPTIONS"]["opt_synthflat"] = 'True'
 
         config_object["SETTINGS"] = {}
-        config_object["SETTINGS"]["set_write_pickle"] = 'True'
         config_object["SETTINGS"]["set_export_corr_input"] = 'True'
         config_object["SETTINGS"]["set_circular_hist"] = 'True'
         config_object["SETTINGS"]["set_grey_flat"] = 'True'
@@ -866,7 +810,6 @@ class NewGUI():
         self.opt_radprof.set(config_object["OPTIONS"]["opt_radprof"]     == 'True')
         self.opt_synthflat.set(config_object["OPTIONS"]["opt_synthflat"] == 'True')
 
-        self.set_write_pickle.set(config_object["SETTINGS"]["set_write_pickle"]   == 'True')
         self.set_export_corr_input.set(config_object["SETTINGS"]["set_export_corr_input"]   == 'True')
         self.set_circular_hist.set(config_object["SETTINGS"]["set_circular_hist"] == 'True')
         self.set_grey_flat.set(config_object["SETTINGS"]["set_grey_flat"]         == 'True')
@@ -986,12 +929,6 @@ class NewGUI():
                     imobj = Image(file)
                 imobj.load()
                 if self.check_stop(): return
-
-                # write pickle
-                if self.set_write_pickle.get():
-                    self.update_labels(status="save pickle file...")
-                    imobj.write_pickle()
-                    if self.check_stop(): return
 
                 # write original image
                 if self.set_export_corr_input.get():
