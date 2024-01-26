@@ -3,14 +3,13 @@ import tkinter.font
 import tkinter.messagebox # for pyinstaller
 from tkinter.filedialog import askopenfilename
 from configparser import ConfigParser
-import glob, os, sys, copy, numpy as np, math
+import glob, os, sys, copy, numpy as np
 import cv2, pickle, bz2
 from rawpy import imread
 from scipy.stats import sigmaclip
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 import threading
-from functools import lru_cache
 import datetime as dt
 from astropy.io import fits
 
@@ -307,28 +306,45 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
     # measure time
     start = dt.datetime.now()
 
-    # shape
+    # shape, prepare
     height, width = out_size[:2]
     centerdist_map = calc_centerdist_map(out_size)
+    im_syn = np.zeros(out_size)
+
+    # normalize (again)
+    colors_in = rad_profile.shape[1] - 1
+    for c in range(colors_in):
+        rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
 
     # convert centerdist_map into indices of radial profile
     r_indices = (RADIAL_RESOLUTION - 1) * centerdist_map / centerdist_map[0, 0]
     r_indices = r_indices.astype(int)
 
-    # normalize (again)
-    for c in range(rad_profile.shape[1] - 1):
-        rad_profile[:, c + 1] = rad_profile[:, c + 1] / np.max(rad_profile[:, c + 1])
+    # 3D output
+    if len(out_size) >= 3:
+        if out_size[2] != 3:
+            raise ValueError("Synthflat should have 3 colors or none!!")
+        for c in range(3):
+            if grey_flat:
+                # write green flat in each color
+                im_syn[:, :, c] = rad_profile[r_indices, 2]
+            else:
+                # write separate flat in each color
+                im_syn[:, :, c] = rad_profile[r_indices, c + 1]
 
-    # initialize image
-    im_syn = np.zeros(out_size)
+    # 2D output
+    else:
+        if grey_flat:
+            # write green flat once
+            im_syn = rad_profile[r_indices, 2]
+        else:
+            # write separate flats in each color and bayer afterwards
+            im_syn = np.zeros([out_size[0], out_size[1], colors_in])
+            for c in range(colors_in):
+                im_syn[:, :, c] = rad_profile[r_indices, c + 1]
+            im_syn = bayer(im_syn, keep_size=True)
 
-    # iterate image, determine radius and write flat pixels
-    for i in range(height):
-        for j in range(width):
-
-            # write pixel
-            write_flat_pixel(im_syn, rad_profile, grey_flat, r_indices[i, j], i, j)
-
+    # print flat info
     print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
     print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
     print("minimum:  ", np.min(im_syn[im_syn > 0]))
@@ -376,37 +392,6 @@ def separate_axes(image):
 
     return image_axes, color_axis
 
-def write_flat_pixel(im_syn, rad_profile, grey_flat, r_index, i, j):
-
-    # write debayered or not?
-    if len(im_syn.shape) >= 3:
-        height, width, colors = im_syn.shape
-        if colors != 3:
-            raise ValueError("Synthflat should have 3 colors or none!!")
-    else:
-        colors = 0
-
-    # calculate brightness and set new image pixel
-    if grey_flat:
-        if colors > 0:
-            for c in range(colors):
-                im_syn[i, j, c] = rad_profile[r_index, 2]
-        else:
-            im_syn[i, j] = rad_profile[r_index, 2]
-    else:
-        if colors > 0:
-            for c in range(colors):
-                im_syn[i, j, c] = rad_profile[r_index, c + 1]
-        else:
-            if i % 2 == 0 and j % 2 == 0:  # links oben
-                im_syn[i, j] = rad_profile[r_index, 1]  # R
-            if i % 2 == 0 and j % 2 == 1:  # rechts oben
-                im_syn[i, j] = rad_profile[r_index, 2]  # G
-            if i % 2 == 1 and j % 2 == 0:  # links unten
-                im_syn[i, j] = rad_profile[r_index, 2]  # G
-            if i % 2 == 1 and j % 2 == 1:  # rechts unten
-                im_syn[i, j] = rad_profile[r_index, 3]  # B
-
 
 def debayer(image):
     rows = image.shape[0]
@@ -416,35 +401,53 @@ def debayer(image):
         for m in range(cols):
             if n % 2 == 0 and m % 2 == 0:  # links oben
                 db_image[int((n + 0) / 2), int((m + 0) / 2), 0] = image[n, m]  # R
-            if n % 2 == 0 and m % 2 == 1:  # rechts oben
+            elif n % 2 == 0 and m % 2 == 1:  # rechts oben
                 db_image[int((n + 0) / 2), int((m - 1) / 2), 1] = image[n, m]  # G
-            if n % 2 == 1 and m % 2 == 0:  # links unten
+            elif n % 2 == 1 and m % 2 == 0:  # links unten
                 db_image[int((n - 1) / 2), int((m + 0) / 2), 2] = image[n, m]  # G
-            if n % 2 == 1 and m % 2 == 1:  # rechts unten
+            else:  # rechts unten
                 db_image[int((n - 1) / 2), int((m - 1) / 2), 3] = image[n, m]  # B
     return db_image
 
 
-def bayer(image):
+def bayer(image, keep_size=False):
     if len(image.shape) < 3:
         return image
-    rows = image.shape[0]
-    cols = image.shape[1]
-    colors = image.shape[2]
-    b_image = np.zeros((rows * 2, cols * 2))
-    for i in range(rows):
-        for j in range(cols):
-            for c in range(colors):
-                if c == 0:  # R
-                    b_image[2 * i + 0, 2 * j + 0] = image[i, j, c]  # links oben
-                elif c == 1:  # G
-                    b_image[2 * i + 1, 2 * j + 0] = image[i, j, c]  # rechts oben
+    rows, cols, colors = image.shape
+    print("bayer " + str(colors) + " colors image" + " (keep size)" * keep_size)
+    if keep_size:
+        b_image = np.zeros((rows, cols))
+        for n in range(rows):
+            for m in range(cols):
+                if n % 2 == 0 and m % 2 == 0:  # links oben
+                    b_image[n, m] = image[n, m, 0]  # R
+                elif n % 2 == 0 and m % 2 == 1:  # rechts oben
+                    b_image[n, m] = image[n, m, 1]  # G
+                elif n % 2 == 1 and m % 2 == 0:  # links unten
                     if colors == 3:
+                        b_image[n, m] = image[n, m, 1]  # G
+                    else:
+                        b_image[n, m] = image[n, m, 2]  # B
+                else:  # rechts unten
+                    if colors == 3:
+                        b_image[n, m] = image[n, m, 2]  # G
+                    else:
+                        b_image[n, m] = image[n, m, 3]  # B
+    else:
+        b_image = np.zeros((rows * 2, cols * 2))
+        for i in range(rows):
+            for j in range(cols):
+                for c in range(colors):
+                    if c == 0:  # R
+                        b_image[2 * i + 0, 2 * j + 0] = image[i, j, c]  # links oben
+                    elif c == 1:  # G
+                        b_image[2 * i + 1, 2 * j + 0] = image[i, j, c]  # rechts oben
+                        if colors == 3:
+                            b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
+                    elif c == 3:  # G
                         b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
-                elif c == 3:  # G
-                    b_image[2 * i + 0, 2 * j + 1] = image[i, j, c]  # links unten
-                else:  # B
-                    b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
+                    else:  # B
+                        b_image[2 * i + 1, 2 * j + 1] = image[i, j, c]  # rechts unten
     return b_image
 
 
@@ -940,7 +943,7 @@ class NewGUI():
         elif contains(self.label_status_var.get().lower(), ["write"]):
             self.label_status.configure(background=rgbtohex(240, 230, 180))
         else:
-            self.label_status.configure(background=rgbtohex(250, 220, 180))
+            self.label_status.configure(background=rgbtohex(240, 210, 180))
         if len(self.loaded_files) > 0:
             self.label_files.configure(background=rgbtohex(210, 230, 255))
         else:
@@ -1070,5 +1073,7 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    # print(calc_centerdist_map((4,6,3)))
+    # centerdist_map = calc_centerdist_map((4, 6, 3)).astype(int)
+    # array = np.array([5,6,7])
+    # print(array[centerdist_map])
 
