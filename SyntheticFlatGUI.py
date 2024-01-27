@@ -64,7 +64,7 @@ def load_image(file):
     im_load = set_depth(im_load)
 
     # order axes
-    im_deb = order_axes(im_load, type='HWD')
+    im_deb = order_axes(im_load, type='HWC')
 
     # check colors and debayer, if no colors
     if len(im_deb.shape) == 3:
@@ -85,6 +85,10 @@ def load_image(file):
 
 
 def corr_gradient(image, resolution_factor=4):
+
+    # measure time
+    start = dt.datetime.now()
+
     # measure slopes
     height, width, colors = image.shape
     slopes_x = []
@@ -124,12 +128,16 @@ def corr_gradient(image, resolution_factor=4):
         gradient = X * slopes_x[c] + Y * slopes_y[c] - (slopes_x[c] + slopes_y[c]) / 2
         image[:, :, c] = image[:, :, c] - gradient
 
+    # print execution time
+    stop = dt.datetime.now()
+    print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
+
     image = set_depth(image)
     print_image_info(image)
     return image
 
 
-def calc_histograms(image, circular=False):
+def calc_histogram(image, circular=False):
 
     image = copy.deepcopy(image).astype(np.float16)
 
@@ -139,14 +147,14 @@ def calc_histograms(image, circular=False):
 
     for c in range(colors):
         if circular:
-            for i in range(height):
-                for j in range(width):
-                    thisdist = centerdist_map[i, j]
-                    if thisdist > height / 2 or thisdist > width / 2:
-                        image[i, j, c] = np.nan
+            mask = (centerdist_map > height / 2) | (centerdist_map > width / 2)
+            image[mask, c] = np.nan
 
         # caLculate histogram
-        counts, bins = np.histogram(image[:, :, c].flatten(), np.linspace(0, 2 ** 12, 2 ** 8))
+        counts, bins = np.histogram(
+            image[:, :, c].flatten(),
+            np.linspace(0, getmax(np.nanmax(image[:, :, c])), 2 ** 8)
+        )
         bins = bins[1:]
         if c == 0:
             data = bins
@@ -313,9 +321,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
 
     # 3D output
     if len(out_size) >= 3:
-        if out_size[2] != 3:
-            raise ValueError("Synthflat should have 3 colors or none!!")
-        for c in range(3):
+        for c in range(out_size[2]):
             if grey_flat:
                 # write green flat in each color
                 im_syn[:, :, c] = rad_profile[r_indices, 2]
@@ -357,38 +363,48 @@ def print_image_info(image):
     uniques = "d" + str(len(np.unique(image)))
     print(image.shape, uniques, minmedmax, sep=' | ')
 
-def order_axes(image, type='HWD'):
+def get_axes_order(shape):
+    first_axis = -1
+    type = ""
+    for c in range(len(shape)):
+        if shape[c] < 5:
+            type += "C"
+        elif first_axis > 0:
+            if shape[c] < first_axis:
+                type += "H"
+                type = type.replace("X", "W")
+            else:
+                type += "W"
+                type = type.replace("X", "H")
+        else:
+            type += "X"
+            first_axis = shape[c]
+    return type
+
+def order_axes(image, type='HWC'):
     image_shape = image.shape
     axes_sort = np.argsort(image_shape)[::-1]
     image = np.transpose(image, axes=axes_sort)
-    if type == 'HWD':
+    if type == 'HWC':
         image = np.swapaxes(image, 0, 1)
-    if len(image.shape) == 3 and type == 'DHW':
+    if len(image.shape) == 3 and type == 'CHW':
         image = np.swapaxes(image, 0, 2)
     return image
-
-def separate_axes(image):
-    # try to find a rgb dimension
-    color_axis = None
-    for c in range(len(image.shape)):
-        if image.shape[d] < 5:
-            color_axis = d
-            break
-
-    # calc tuple of image_axes
-    image_axes = []
-    for c in range(len(image.shape)):
-        if not c == color_axis:
-            image_axes.append(d)
-    image_axes = tuple(image_axes)
-
-    return image_axes, color_axis
 
 def set_depth(image):
     if np.max(image) > 1:
         return image.astype(np.uint16)
     else:
         return image.astype(np.float32)
+
+def getmax(maxval):
+    if maxval <= 1:
+        return 1
+    else:
+        vallog = int(np.log2(maxval)) + 1
+        if vallog % 2 == 1:
+            vallog += 1
+    return 2 ** vallog - 1
 
 def debayer(image):
     rows = image.shape[0]
@@ -538,13 +554,15 @@ class Image():
 
         # origtype, outtype
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
-        if self.origtype in RAWTYPES + TIFTYPES + FITSTYPES:
+        if self.origtype in RAWTYPES + TIFTYPES:
             self.outtype = 'tif'
         else:
             self.outtype = self.origtype
 
     def write_image(self, suffix, flat=False):
         print("write image \"", suffix, "\"")
+        newfile = self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype
+        print(newfile)
 
         if flat:
             image_write = self.image_flat
@@ -555,6 +573,8 @@ class Image():
         # -> if original was bayered, bayer it again before writing
         if len(self.origshape) == 2:
             image_write = bayer(image_write)
+        else:
+            image_write = order_axes(image_write, get_axes_order(self.origshape))
 
         # write
         # if self.origtype in RAWTYPES:
@@ -564,8 +584,10 @@ class Image():
         # image_write = ((2 ** 16 - 1) * image_write).astype(np.uint16)
         image_write = np.float32(image_write)
         print_image_info(image_write)
-        print(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype)
-        cv2.imwrite(self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype, image_write)
+        if self.outtype in TIFTYPES+OTHERTYPES:
+            cv2.imwrite(newfile, image_write)
+        else:
+            fits.PrimaryHDU(image_write).writeto(newfile, overwrite=True)
 
     def gradcorr(self, resolution_factor):
         if self.debug:
@@ -580,7 +602,7 @@ class Image():
     def calc_histogram(self, circular=False):
         if self.debug:
             return
-        data = calc_histograms(
+        data = calc_histogram(
             self.image,
             circular=circular,
         )
@@ -605,13 +627,10 @@ class Image():
         self.image_flat = calc_synthetic_flat(
             self.radprof,
             grey_flat=grey_flat,
-            out_size=self.origshape,
+            out_size=self.image.shape,
         )
 
     def apply_synthetic_flat(self):
-        if len(self.origshape) == 2:
-            print("bayer input image (back)...")
-            self.image = bayer(self.image)
         self.image = self.image / self.image_flat
         self.image = set_depth(self.image)
 
@@ -1007,7 +1026,4 @@ class NewGUI():
 
 if __name__ == '__main__':
     new = NewGUI()
-    # centerdist_map = calc_centerdist_map((4, 6, 3)).astype(int)
-    # array = np.array([5,6,7])
-    # print(array[centerdist_map])
 
