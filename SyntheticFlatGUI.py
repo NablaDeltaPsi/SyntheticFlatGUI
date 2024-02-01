@@ -19,7 +19,7 @@ VERSION = '1.4.beta'
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
 IGNORE_RADII = 5          # ignore pixels extreme radii (close to 0 and maximum)
-RADIAL_RESOLUTION = 100000  # should be larger than 16 bit (65536)
+RADIAL_RESOLUTION = 1000000  # should be larger than 16 bit (65536)
 DEBUG_MODE = False
 
 RAWTYPES = ['arw', 'crw', 'cr2', 'cr3', 'nef', 'raf', 'rw2']
@@ -51,7 +51,7 @@ def load_image(file):
     elif imagetype in FITSTYPES:
         print("read fits type image (" + imagetype.upper() + ") ...")
         im_load, header = fits.getdata(file, ext=0, header=True)
-        print(header)
+        print(" ".join(str(header).split()))
     elif imagetype in OTHERTYPES:
         print("read other type image (" + imagetype.upper() + ") ...")
         im_load = cv2.imread(file, flags=cv2.IMREAD_UNCHANGED)  # cv2.IMREAD_ANYDEPTH, cv2.IMREAD_UNCHANGED
@@ -61,7 +61,6 @@ def load_image(file):
     # remember original shape
     origshape = im_load.shape
     print_image_info(im_load)
-    im_load = set_depth(im_load)
 
     # order axes
     im_deb = order_axes(im_load, type='HWC')
@@ -132,7 +131,6 @@ def corr_gradient(image, resolution_factor=4):
     stop = dt.datetime.now()
     print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
 
-    image = set_depth(image)
     print_image_info(image)
     return image
 
@@ -342,15 +340,15 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
             im_syn = bayer(im_syn, keep_size=True)
 
     # print flat info
-    print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
-    print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
-    print("minimum:  ", np.min(im_syn[im_syn > 0]))
+    if np.count_nonzero(im_syn) > 0:
+        print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
+    if np.count_nonzero(np.isnan(im_syn)) > 0:
+        print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
 
     # print execution time
     stop = dt.datetime.now()
     print("execution time:", int((stop-start).total_seconds() + 0.5), "seconds")
 
-    im_syn = set_depth(im_syn)
     print_image_info(im_syn)
     return im_syn
 
@@ -360,7 +358,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
 
 def print_image_info(image):
     minmedmax = str(np.min(image)) + " > " + str(np.median(image)) + " > " + str(np.max(image))
-    uniques = "d" + str(len(np.unique(image)))
+    uniques = "d" + str(len(np.unique(image))) + "/" + str(int(np.max(image) / np.min(np.diff(sorted(np.unique(image))))))
     print(image.shape, uniques, minmedmax, sep=' | ')
 
 def get_axes_order(shape):
@@ -392,10 +390,21 @@ def order_axes(image, type='HWC'):
     return image
 
 def set_depth(image):
-    if np.max(image) > 1:
-        return image.astype(np.uint16)
+    if np.max(image) > 2 ** 16 - 1:
+        depth_image = image.astype(np.uint32)
+    elif np.max(image) > 2 ** 8 - 1:
+        depth_image = image.astype(np.uint16)
+    elif np.max(image) > 1:
+        depth_image = image.astype(np.uint8)
     else:
-        return image.astype(np.float32)
+        depth_image = image.astype(np.float32)
+
+    # check if some nonzeros have been set to zero
+    set_zero = image.flatten()[(image.flatten() == 0) & (depth_image.flatten() > 0)]
+    if len(set_zero) > 0:
+        print(">>> Some values were set to zero!!")
+        print(set_zero)
+    return depth_image
 
 def getmax(maxval):
     if maxval <= 1:
@@ -414,7 +423,7 @@ def debayer(image):
     db_image[:,:,1] = image[0::2, 1::2]
     db_image[:,:,2] = image[1::2, 0::2]
     db_image[:,:,3] = image[1::2, 1::2]
-    return set_depth(db_image)
+    return db_image
 
 
 def bayer(image, keep_size=False):
@@ -439,7 +448,7 @@ def bayer(image, keep_size=False):
         b_image[1::2, 0::2] = image[:,:,color_order[2]]
         b_image[1::2, 1::2] = image[:,:,color_order[3]]
 
-    return set_depth(b_image)
+    return b_image
 
 
 def calc_centerdist_map(shape):
@@ -554,7 +563,7 @@ class Image():
 
         # origtype, outtype
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
-        if self.origtype in RAWTYPES + TIFTYPES:
+        if self.origtype in RAWTYPES:
             self.outtype = 'tif'
         else:
             self.outtype = self.origtype
@@ -564,6 +573,7 @@ class Image():
         newfile = self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype
         print(newfile)
 
+        # choose
         if flat:
             image_write = self.image_flat
         else:
@@ -577,17 +587,12 @@ class Image():
             image_write = order_axes(image_write, get_axes_order(self.origshape))
 
         # write
-        # if self.origtype in RAWTYPES:
-        #     image_write = image_write / np.max(image_write)
-        # else:
-        #     image_write = image_write
-        # image_write = ((2 ** 16 - 1) * image_write).astype(np.uint16)
         image_write = np.float32(image_write)
         print_image_info(image_write)
-        if self.outtype in TIFTYPES+OTHERTYPES:
-            cv2.imwrite(newfile, image_write)
-        else:
+        if self.outtype in FITSTYPES:
             fits.PrimaryHDU(image_write).writeto(newfile, overwrite=True)
+        else:
+            cv2.imwrite(newfile, image_write)
 
     def gradcorr(self, resolution_factor):
         if self.debug:
@@ -632,7 +637,6 @@ class Image():
 
     def apply_synthetic_flat(self):
         self.image = self.image / self.image_flat
-        self.image = set_depth(self.image)
 
 
 # TKINTER CLASS =====================================================
@@ -804,7 +808,7 @@ class NewGUI():
 
         config_object["OPTIONS"] = {}
         config_object["OPTIONS"]["opt_gradient"] = 'True'
-        config_object["OPTIONS"]["opt_histogram"] = 'False'
+        config_object["OPTIONS"]["opt_histogram"] = 'True'
         config_object["OPTIONS"]["opt_radprof"] = 'True'
         config_object["OPTIONS"]["opt_synthflat"] = 'True'
 
@@ -955,10 +959,17 @@ class NewGUI():
                     imobj.write_image("_0_input")
                     if self.check_stop(): return
 
+                # subtract bias
+                if abs(self.bias_value) > 0:
+                    self.update_labels(status="subtract bias...")
+                    imobj.subtract_bias(self.bias_value)
+                    if self.check_stop(): return
+
                 # gradient
                 if self.opt_gradient.get():
                     self.update_labels(status="calc gradient...")
                     imobj.gradcorr(resolution_factor)
+                    if self.check_stop(): return
                     imobj.gradcorr(resolution_factor)
                     if self.check_stop(): return
 
@@ -967,11 +978,6 @@ class NewGUI():
                         self.update_labels(status="write gradcorr...")
                         imobj.write_image("_1_gradcorr")
                         if self.check_stop(): return
-
-                # subtract bias
-                self.update_labels(status="subtract bias...")
-                imobj.subtract_bias(self.bias_value)
-                if self.check_stop(): return
 
                 # histogram
                 if self.opt_histogram.get():
