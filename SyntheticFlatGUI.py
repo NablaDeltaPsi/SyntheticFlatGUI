@@ -14,7 +14,7 @@ import datetime as dt
 from astropy.io import fits
 
 GUINAME = "SyntheticFlatGUI"
-VERSION = '1.4.beta'
+VERSION = '2.0'
 
 # STATIC SETTINGS =============================================================
 IGNORE_EDGE = 10          # ignore pixels close to the image edges
@@ -83,7 +83,7 @@ def load_image(file):
     return im_deb, origshape, header
 
 
-def corr_gradient(image, resolution_factor=4, sigma_clip=1):
+def corr_gradient(image, resolution_factor=4, sigma_clip=3):
 
     # measure time
     start = dt.datetime.now()
@@ -410,26 +410,29 @@ def get_depth(image):
     return depth
 
 def set_depth(image, depth):
+    depth_image = copy.deepcopy(image)
+
     # check and print
     if not depth:
         print("depth ist None...")
-        return image
+        return depth_image
     elif depth > 0:
         print("set depth uint" + str(depth) + " (max " + str(2 ** depth - 1) + ")")
     else:
         print("set depth float 32" + " (max " + str(2 ** 32 - 1) + ")")
 
     # if input image is 0-1 and depth is integer, multiply
-    if np.max(image) <= 1 and depth > 0:
-        depth_image = (2 ** depth -1) * image
+    if np.max(depth_image) <= 1 and depth > 0:
+        depth_image = (2 ** depth -1) * depth_image
     else:
-        depth_image = image
+        depth_image = depth_image
 
     # clip
     if depth > 0:
-        depth_image[depth_image > (2 ** depth - 1)] = 2 ** depth - 1
+        clip_value = 2 ** depth - 1
     else:
-        depth_image[depth_image > 1] = 1
+        clip_value = 1
+    depth_image = np.clip(depth_image, 0, clip_value)
 
     # set image depth
     if depth == 32:
@@ -616,8 +619,12 @@ class Image():
         # origdepth
         self.origdepth = get_depth(self.image)
 
+        # float conversion necessary for unclipped calculations
+        # handle clipping and depth upon writing images
+        self.image = self.image.astype(np.float64)
+
     def write_image(self, suffix, flat=False):
-        print("write image \"", suffix, "\"")
+        print("write image \"" + suffix + "\"")
         newfile = self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype
         print(newfile)
 
@@ -635,6 +642,8 @@ class Image():
             image_write = order_axes(image_write, get_axes_order(self.origshape))
 
         # write
+        #image_write = image_write[18:22, 28:32, :]
+        #print(image_write[:,:,0])
         image_write = set_depth(image_write, self.origdepth)
         print_image_info(image_write)
         if self.outtype in FITSTYPES:
