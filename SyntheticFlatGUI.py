@@ -83,7 +83,7 @@ def load_image(file):
     return im_deb, origshape, header
 
 
-def corr_gradient(image, resolution_factor=4):
+def corr_gradient(image, resolution_factor=4, sigma_clip=1):
 
     # measure time
     start = dt.datetime.now()
@@ -99,21 +99,29 @@ def corr_gradient(image, resolution_factor=4):
             continue
 
         rowmeans = []
+        rowselects = []
         for row in range(height):
             if row < IGNORE_EDGE or row > height - IGNORE_EDGE:
                 continue
             if row % resolution_factor == 0:
-                rowmeans.append(np.mean(sigmaclip(image[row,IGNORE_EDGE:-IGNORE_EDGE, c], low=2, high=2)[0]))
-        slope_y = np.mean(np.diff(rowmeans)) * height / resolution_factor
+                this_rowmean = sigma_clip_mean(image[row,IGNORE_EDGE:-IGNORE_EDGE, c], sigma_clip=sigma_clip)
+                if this_rowmean:
+                    rowmeans.append(this_rowmean)
+                    rowselects.append(row)
+        slope_y = np.mean(np.diff(rowmeans) / np.diff(rowselects)) * height
         slopes_y.append(slope_y)
 
         colmeans = []
+        colselects = []
         for col in range(width):
             if col < IGNORE_EDGE or col > width - IGNORE_EDGE:
                 continue
             if col % resolution_factor == 0:
-                colmeans.append(np.mean(sigmaclip(image[IGNORE_EDGE:-IGNORE_EDGE, col, c], low=2, high=2)[0]))
-        slope_x = np.mean(np.diff(colmeans)) * width / resolution_factor
+                this_colmean = sigma_clip_mean(image[IGNORE_EDGE:-IGNORE_EDGE, col, c], sigma_clip=sigma_clip)
+                if this_colmean:
+                    colmeans.append(this_colmean)
+                    colselects.append(col)
+        slope_x = np.mean(np.diff(colmeans) / np.diff(colselects)) * width
         slopes_x.append(slope_x)
 
     # print
@@ -137,7 +145,7 @@ def corr_gradient(image, resolution_factor=4):
 
 def calc_histogram(image, circular=False):
 
-    image = copy.deepcopy(image).astype(np.float16)
+    image = copy.deepcopy(image)
 
     # shape
     height, width, colors = image.shape
@@ -340,7 +348,7 @@ def calc_synthetic_flat(rad_profile, grey_flat=False, out_size=(4024, 6024)):
             im_syn = bayer(im_syn, keep_size=True)
 
     # print flat info
-    if np.count_nonzero(im_syn) > 0:
+    if np.count_nonzero(im_syn == 0) > 0:
         print("zeros (%):", "{:.10f}".format(100.0 - 100.0 * np.count_nonzero(im_syn) / np.prod(im_syn.shape)))
     if np.count_nonzero(np.isnan(im_syn)) > 0:
         print("nan (%):", "{:.10f}".format(100.0 * np.count_nonzero(np.isnan(im_syn)) / np.prod(im_syn.shape)))
@@ -389,18 +397,52 @@ def order_axes(image, type='HWC'):
         image = np.swapaxes(image, 0, 2)
     return image
 
-def set_depth(image):
+def get_depth(image):
     if np.max(image) > 2 ** 16 - 1:
-        depth_image = image.astype(np.uint32)
+        depth = 32
     elif np.max(image) > 2 ** 8 - 1:
-        depth_image = image.astype(np.uint16)
+        depth = 16
     elif np.max(image) > 1:
-        depth_image = image.astype(np.uint8)
+        depth = 8
     else:
-        depth_image = image.astype(np.float32)
+        depth = 0
+    print("image depth:", depth)
+    return depth
+
+def set_depth(image, depth):
+    # check and print
+    if not depth:
+        print("depth ist None...")
+        return image
+    elif depth > 0:
+        print("set depth uint" + str(depth) + " (max " + str(2 ** depth - 1) + ")")
+    else:
+        print("set depth float 32" + " (max " + str(2 ** 32 - 1) + ")")
+
+    # if input image is 0-1 and depth is integer, multiply
+    if np.max(image) <= 1 and depth > 0:
+        depth_image = (2 ** depth -1) * image
+    else:
+        depth_image = image
+
+    # clip
+    if depth > 0:
+        depth_image[depth_image > (2 ** depth - 1)] = 2 ** depth - 1
+    else:
+        depth_image[depth_image > 1] = 1
+
+    # set image depth
+    if depth == 32:
+        depth_image = depth_image.astype(np.uint32)
+    elif depth == 16:
+        depth_image = depth_image.astype(np.uint16)
+    elif depth == 8:
+        depth_image = depth_image.astype(np.uint8)
+    else:
+        depth_image = depth_image.astype(np.float32)
 
     # check if some nonzeros have been set to zero
-    set_zero = image.flatten()[(image.flatten() == 0) & (depth_image.flatten() > 0)]
+    set_zero = image.flatten()[(image.flatten() > 0) & (depth_image.flatten() == 0)]
     if len(set_zero) > 0:
         print(">>> Some values were set to zero!!")
         print(set_zero)
@@ -492,8 +534,7 @@ def rgbtohex(r, g, b):
 
 def apply_statistics(array, statistics):
     if statistics[:10] == 'sigma clip':
-        number = statistics[10:].strip()
-        sigma_clip = float(number)
+        sigma_clip = float(statistics[10:].strip())
         result = sigma_clip_mean(array, sigma_clip=sigma_clip)
     elif statistics == 'median':
         result = np.median(array)
@@ -508,7 +549,10 @@ def apply_statistics(array, statistics):
 
 def sigma_clip_mean(array, sigma_clip=2.0):
     reduced = sigmaclip(array, low=sigma_clip, high=sigma_clip)[0]
-    result = np.mean(reduced)
+    if not reduced.any():
+        result = None
+    else:
+        result = np.mean(reduced)
     return result
 
 
@@ -532,6 +576,7 @@ class Image():
         self.origpath = os.path.dirname(file)
         self.origtype = os.path.basename(self.file).split(".")[1].lower()
         self.origshape = None
+        self.origdepth = None
         self.outpath = ''
         self.outpath_csv = ''
         self.outtype = ''
@@ -568,6 +613,9 @@ class Image():
         else:
             self.outtype = self.origtype
 
+        # origdepth
+        self.origdepth = get_depth(self.image)
+
     def write_image(self, suffix, flat=False):
         print("write image \"", suffix, "\"")
         newfile = self.outpath + os.sep + os.path.basename(self.file).split('.')[0] + suffix + "." + self.outtype
@@ -587,10 +635,10 @@ class Image():
             image_write = order_axes(image_write, get_axes_order(self.origshape))
 
         # write
-        image_write = np.float32(image_write)
+        image_write = set_depth(image_write, self.origdepth)
         print_image_info(image_write)
         if self.outtype in FITSTYPES:
-            fits.PrimaryHDU(image_write).writeto(newfile, overwrite=True)
+            fits.PrimaryHDU(image_write, header=self.header).writeto(newfile, overwrite=True)
         else:
             cv2.imwrite(newfile, image_write)
 
@@ -635,8 +683,11 @@ class Image():
             out_size=self.image.shape,
         )
 
-    def apply_synthetic_flat(self):
+    def apply_synthetic_flat(self, clip=True):
+        if clip:
+            clip_val = np.max(self.image)
         self.image = self.image / self.image_flat
+        self.image[self.image > clip_val] = clip_val
 
 
 # TKINTER CLASS =====================================================
